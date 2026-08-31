@@ -93,7 +93,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
-from convergence_signal import calculate_convergence_signal
+from src.convergence_signal import calculate_convergence_signal
 
 
 TRADING_DAYS_PER_YEAR = 252

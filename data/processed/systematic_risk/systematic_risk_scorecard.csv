@@ -1,0 +1,5 @@
+question,result,evidence
+Full-period market beta statistically non-zero?,YES,"beta=-0.492, p=0.0453"
+Downside beta exceeds upside beta?,NO,"down=-1.631, up=-0.414"
+Drawdown-window beta exceeds full-period beta?,YES,"drawdown=-0.380, full=-0.492"
+Evidence of nonlinear market exposure?,NO / INCONCLUSIVE,quadratic p=0.9524

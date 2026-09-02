@@ -1,0 +1,4 @@
+question,result,evidence
+Is realized selected-horizon convergence close to the model-implied probability?,NO,"model=0.703, realized=0.254, gap=-0.449"
+Does eventual convergence exceed selected-horizon convergence?,NO,"eventual=0.254, within horizon=0.254"
+Are expiry trades economically damaging on average?,YES,expiry mean return=-0.111

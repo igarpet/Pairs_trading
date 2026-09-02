@@ -1,0 +1,14 @@
+,value
+n_total_trades,254.0
+n_assessable_selected_horizon,232.0
+n_censored_end_of_test,22.0
+mean_model_probability_selected_horizon,0.7028732758620689
+observed_convergence_rate,0.2543103448275862
+observed_convergence_within_selected_horizon,0.2543103448275862
+calibration_gap_observed_minus_model,-0.44856293103448275
+mean_model_probability_max_horizon,0.8577810344827587
+expiry_rate,0.7456896551724138
+brier_score_selected_horizon,0.3910483025862069
+mean_trade_return,0.11176148389338897
+median_trade_return,0.02969121425698854
+total_realized_pnl,59516.8516036289

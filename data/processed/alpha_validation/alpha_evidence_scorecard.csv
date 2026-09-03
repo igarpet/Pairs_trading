@@ -1,0 +1,4 @@
+test,supports_alpha_at_5pct,evidence
+Market-adjusted alpha (HAC),False,"alpha=0.000945/day, one-sided p=0.1994"
+20-day moving-block bootstrap,False,"95% CI daily mean=[-0.001228, 0.002778]"
+Structural Top40 pair-selection placebo,False,"actual return=38.851%, randomization p=0.0594"

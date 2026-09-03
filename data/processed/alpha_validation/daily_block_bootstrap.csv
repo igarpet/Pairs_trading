@@ -1,0 +1,2 @@
+observed_mean_daily_return,observed_annualized_simple_mean,bootstrap_ci_2_5_daily,bootstrap_ci_97_5_daily,bootstrap_ci_2_5_annualized_simple,bootstrap_ci_97_5_annualized_simple,block_length_trading_days,n_bootstrap
+0.0007628258050508936,0.1922321028728252,-0.0012276613621776896,0.0027775361283602865,-0.30937066326877777,0.6999391043467922,20,10000

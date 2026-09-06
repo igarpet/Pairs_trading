@@ -13,6 +13,7 @@ permissions:
 env:
   PYTHONUNBUFFERED: '1'
   MPLBACKEND: Agg
+  PYTHONPATH: .
 
 jobs:
   core-pipeline:
@@ -70,17 +71,17 @@ jobs:
                       hits += 1
               if hits != 1:
                   raise RuntimeError(f'{name}: expected exactly one backtest reproduction cell, found {hits}')
-              temp = Path('_workflow_' + name)
-              temp.write_text(json.dumps(nb, indent=1) + '\n', encoding='utf-8')
+              target = Path('workflow_' + name)
+              target.write_text(json.dumps(nb, indent=1) + '\n', encoding='utf-8')
           PY
 
       - name: Execute diagnostics 09-11 from canonical saved backtest
         run: |
           set -euo pipefail
           for nb in 09_systematic_risk_diagnostics.ipynb 10_equilibrium_shift_diagnostics.ipynb 11_static_convergence_calibration.ipynb; do
-            temp="_workflow_$nb"
-            echo "===== Running $temp ====="
-            jupyter nbconvert --to notebook --execute --inplace "$temp" \
+            tmp="workflow_$nb"
+            echo "===== Running $tmp ====="
+            jupyter nbconvert --to notebook --execute --inplace "$tmp" \
               --ExecutePreprocessor.kernel_name=python3 \
               --ExecutePreprocessor.timeout=-1
           done
@@ -97,9 +98,9 @@ jobs:
             04_convergence_signal.ipynb
             07_backtest.ipynb
             08_drawdown_diagnostics.ipynb
-            _workflow_09_systematic_risk_diagnostics.ipynb
-            _workflow_10_equilibrium_shift_diagnostics.ipynb
-            _workflow_11_static_convergence_calibration.ipynb
+            workflow_09_systematic_risk_diagnostics.ipynb
+            workflow_10_equilibrium_shift_diagnostics.ipynb
+            workflow_11_static_convergence_calibration.ipynb
 
   placebo:
     name: Placebo shard ${{ matrix.shard }}
@@ -190,9 +191,9 @@ jobs:
             04_convergence_signal.ipynb
             07_backtest.ipynb
             08_drawdown_diagnostics.ipynb
-            _workflow_09_systematic_risk_diagnostics.ipynb
-            _workflow_10_equilibrium_shift_diagnostics.ipynb
-            _workflow_11_static_convergence_calibration.ipynb
+            workflow_09_systematic_risk_diagnostics.ipynb
+            workflow_10_equilibrium_shift_diagnostics.ipynb
+            workflow_11_static_convergence_calibration.ipynb
 
       - name: Commit final processed results to main
         run: |

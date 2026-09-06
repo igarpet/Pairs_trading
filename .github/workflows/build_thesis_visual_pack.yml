@@ -1,0 +1,193 @@
+name: Build thesis visual pack
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build_thesis_visual_pack.yml'
+
+permissions:
+  contents: read
+
+env:
+  MPLBACKEND: Agg
+  PYTHONPATH: .
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pandas pyarrow matplotlib scipy
+      - name: Build figures and tables
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd, numpy as np, matplotlib.pyplot as plt
+          import traceback, json
+
+          ROOT=Path('data/processed'); OUT=Path('thesis_visual_pack'); FIG=OUT/'figures'; TAB=OUT/'tables'
+          FIG.mkdir(parents=True,exist_ok=True); TAB.mkdir(parents=True,exist_ok=True)
+          errors=[]
+          plt.rcParams.update({'figure.dpi':140,'savefig.dpi':320,'font.size':10,'axes.titlesize':12,'axes.labelsize':10,'legend.fontsize':9})
+          def savefig(name): plt.tight_layout(); plt.savefig(FIG/name,bbox_inches='tight'); plt.close()
+          def safe(name,fn):
+              try: fn()
+              except Exception as e: errors.append({'item':name,'error':repr(e),'traceback':traceback.format_exc()[-1200:]})
+          def rp(rel): return pd.read_parquet(ROOT/rel)
+          def csv(df,name,index=False): df.to_csv(TAB/name,index=index)
+          def first(df,names):
+              for n in names:
+                  if n in df.columns: return n
+              return None
+
+          # Inventory (pair-timeout excluded from thesis evidence)
+          inv=[]
+          for p in sorted(ROOT.rglob('*')):
+              if p.suffix not in {'.parquet','.csv'} or 'pair_timeout' in str(p): continue
+              try:
+                  d=pd.read_parquet(p) if p.suffix=='.parquet' else pd.read_csv(p)
+                  inv.append({'file':str(p),'rows':len(d),'columns':len(d.columns),'column_names':' | '.join(map(str,d.columns))})
+              except Exception as e: inv.append({'file':str(p),'rows':np.nan,'columns':np.nan,'column_names':f'ERROR {e}'})
+          csv(pd.DataFrame(inv),'T00_data_inventory.csv')
+
+          def sample_def():
+              tr=rp('train_prices.parquet'); te=rp('test_prices.parquet'); px=rp('prices.parquet')
+              t=pd.DataFrame([
+                ['Formation',pd.Timestamp(tr.index.min()).date(),pd.Timestamp(tr.index.max()).date(),len(tr),tr.shape[1]],
+                ['Out-of-sample',pd.Timestamp(te.index.min()).date(),pd.Timestamp(te.index.max()).date(),len(te),te.shape[1]],
+                ['Full sample',pd.Timestamp(px.index.min()).date(),pd.Timestamp(px.index.max()).date(),len(px),px.shape[1]]],
+                columns=['sample','start_date','end_date','observations','securities'])
+              csv(t,'T01_sample_definition.csv')
+          safe('sample definition',sample_def)
+
+          def pair_funnel():
+              ps=rp('pair_screening.parquet'); cp=rp('cointegrated_pairs.parquet'); fou=rp('fractional_ou_parameters.parquet'); ep=rp('eligible_pairs.parquet')
+              h=first(fou,['hurst','H'])
+              anti=int((pd.to_numeric(fou[h],errors='coerce')<.5).sum()) if h else np.nan
+              f=pd.DataFrame({'stage':['Correlation-screen candidates','Engle-Granger cointegrated','fOU estimated','Anti-persistent H<0.5','Final selected pairs'],
+                              'count':[len(ps),len(cp),len(fou),anti,len(ep)]})
+              csv(f,'T02_pair_selection_funnel.csv')
+              plt.figure(figsize=(8,4.7)); plt.barh(f['stage'][::-1],f['count'][::-1]); plt.xlabel('Number of pairs'); plt.title('Pair-selection funnel'); savefig('F01_pair_selection_funnel.png')
+              p=first(cp,['adf_pvalue','p_value','pvalue','eg_pvalue'])
+              if not p:
+                  cand=[c for c in cp.columns if 'pvalue' in c.lower() or 'p_value' in c.lower()]; p=cand[0] if cand else None
+              cols=[c for c in ['pair','dependent','independent','alpha','beta'] if c in cp.columns]
+              if p: cols.append(p); csv(cp[cols].sort_values(p).head(40),'T03_strongest_cointegrated_pairs.csv')
+              if p:
+                  x=pd.to_numeric(cp[p],errors='coerce').dropna(); plt.figure(figsize=(7,4.5)); plt.hist(x,bins=30,edgecolor='white'); plt.xlabel('Cointegration residual-test p-value'); plt.ylabel('Pairs'); plt.title('Formation-period cointegration significance'); savefig('F02_cointegration_pvalues.png')
+          safe('pair selection',pair_funnel)
+
+          def fou_figs():
+              fou=rp('fractional_ou_parameters.parquet'); ep=rp('eligible_pairs.parquet'); h=first(fou,['hurst','H'])
+              if h:
+                  plt.figure(figsize=(7,4.5)); plt.hist(pd.to_numeric(fou[h],errors='coerce').dropna(),bins=35,edgecolor='white'); plt.axvline(.5,linestyle='--'); plt.xlabel('Hurst exponent H'); plt.ylabel('Pairs'); plt.title('Distribution of estimated Hurst exponents'); savefig('F03_hurst_distribution.png')
+              t70=first(ep,['structural_t70','t70','T70','convergence_horizon'])
+              if t70:
+                  plt.figure(figsize=(7,4.5)); plt.hist(pd.to_numeric(ep[t70],errors='coerce').dropna(),bins=16,edgecolor='white'); plt.xlabel('Structural T70 (trading days)'); plt.ylabel('Selected pairs'); plt.title('Structural convergence horizons of selected pairs'); savefig('F04_structural_t70_distribution.png')
+              keep=[c for c in ['pair','dependent','independent','hurst','H','kappa','sigma','drift_half_life','half_life','structural_t70','t70','structural_probability_max'] if c in ep.columns]
+              csv(ep[keep].sort_values(t70 if t70 else keep[0]),'T04_final_selected_pair_characteristics.csv')
+              eh=first(ep,['hurst','H'])
+              if eh and t70:
+                  plt.figure(figsize=(6.5,4.8)); plt.scatter(pd.to_numeric(ep[eh],errors='coerce'),pd.to_numeric(ep[t70],errors='coerce'),alpha=.8); plt.xlabel('Hurst exponent H'); plt.ylabel('Structural T70 (trading days)'); plt.title('Anti-persistence and model-implied convergence horizon'); savefig('F05_hurst_vs_structural_t70.png')
+          safe('fOU and eligibility',fou_figs)
+
+          def vol_fig():
+              v=rp('volatility_forecasts.parquet'); csv(v.describe(include='all').T.reset_index().rename(columns={'index':'variable'}),'T05_volatility_forecast_summary.csv')
+              nums=v.select_dtypes(include=np.number).columns.tolist(); vc=[c for c in nums if 'vol' in c.lower() or 'sigma' in c.lower()]
+              if vc:
+                  vals=pd.to_numeric(v[vc[0]],errors='coerce').dropna(); plt.figure(figsize=(7,4.5)); plt.hist(vals,bins=35,edgecolor='white'); plt.xlabel(vc[0]); plt.ylabel('Observations'); plt.title('Distribution of EWMA volatility forecasts'); savefig('F06_volatility_forecasts.png')
+          safe('volatility',vol_fig)
+
+          def backtest():
+              eq=rp('equity_curve.parquet').copy(); tr=rp('trades.parquet').copy(); sk=rp('skipped_signals.parquet').copy()
+              if not isinstance(eq.index,pd.DatetimeIndex):
+                  dc=first(eq,['date','Date']);
+                  if dc: eq=eq.set_index(pd.to_datetime(eq[dc]))
+              eq.index=pd.to_datetime(eq.index); eq=eq.sort_index(); ec=first(eq,['equity','portfolio_value']); equity=pd.to_numeric(eq[ec],errors='coerce')
+              dd=equity/equity.cummax()-1; trough=dd.idxmin(); peak=equity.loc[:trough].idxmax()
+              pnl=first(tr,['pnl','trade_pnl','total_pnl']); ret=first(tr,['trade_return','return','pnl_pct']); pair=first(tr,['pair','pair_name'])
+              win=float((pd.to_numeric(tr[pnl],errors='coerce')>0).mean()) if pnl else np.nan
+              stats=pd.DataFrame({'metric':['Initial capital','Final equity','Total return','Completed trades','Win rate','Mean trade return','Median trade return','Maximum drawdown','Peak date','Trough date','Skipped signal records'],
+                                  'value':[100000,float(equity.iloc[-1]),float(equity.iloc[-1]/100000-1),len(tr),win,float(pd.to_numeric(tr[ret],errors='coerce').mean()) if ret else np.nan,float(pd.to_numeric(tr[ret],errors='coerce').median()) if ret else np.nan,float(dd.min()),str(peak.date()),str(trough.date()),len(sk)]})
+              csv(stats,'T06_backtest_summary.csv')
+              plt.figure(figsize=(9,4.8)); plt.plot(eq.index,equity); plt.axvline(peak,linestyle='--',alpha=.6); plt.axvline(trough,linestyle='--',alpha=.6); plt.ylabel('Portfolio equity ($)'); plt.xlabel('Date'); plt.title('Out-of-sample equity curve'); savefig('F07_oos_equity_curve.png')
+              plt.figure(figsize=(9,4.3)); plt.plot(eq.index,dd*100); plt.axvline(trough,linestyle='--',alpha=.6); plt.ylabel('Drawdown (%)'); plt.xlabel('Date'); plt.title('Out-of-sample portfolio drawdown'); savefig('F08_portfolio_drawdown.png')
+              if pair and pnl:
+                  agg={pnl:['size','sum']};
+                  if ret: agg[ret]=['mean']
+                  g=tr.groupby(pair).agg(agg); g.columns=['_'.join(x) for x in g.columns]; g=g.reset_index(); sumcol=pnl+'_sum'; g=g.sort_values(sumcol)
+                  csv(g,'T07_pair_level_performance.csv')
+                  plot=pd.concat([g.head(12),g.tail(12)]).drop_duplicates(pair).sort_values(sumcol)
+                  plt.figure(figsize=(8,7)); plt.barh(plot[pair],plot[sumcol]); plt.xlabel('Total realized P&L ($)'); plt.title('Best and worst pair contributions'); savefig('F09_pair_pnl_contributions.png')
+              if ret:
+                  vals=pd.to_numeric(tr[ret],errors='coerce').dropna()*100; plt.figure(figsize=(7,4.5)); plt.hist(vals,bins=35,edgecolor='white'); plt.axvline(0,linestyle='--'); plt.xlabel('Trade return (%)'); plt.ylabel('Trades'); plt.title('Distribution of completed-trade returns'); savefig('F10_trade_return_distribution.png')
+          safe('backtest',backtest)
+
+          def drawdown_equilibrium():
+              c=rp('equilibrium_shift/drawdown_pair_contributions.parquet'); m=rp('equilibrium_shift/equilibrium_shift_metrics.parquet'); a=rp('equilibrium_shift/local_adf_diagnostics.parquet')
+              csv(c,'T08_drawdown_pair_contributions.csv'); csv(m,'T09_equilibrium_shift_metrics.csv'); csv(a,'T10_local_adf_diagnostics.csv')
+              pc=first(c,['pair','pair_name']); pnl=first(c,['drawdown_pnl','pnl','total_pnl','pnl_contribution'])
+              if pc and pnl:
+                  p=c.sort_values(pnl).head(15); plt.figure(figsize=(8,6)); plt.barh(p[pc],p[pnl]); plt.xlabel('P&L contribution during drawdown ($)'); plt.title('Largest pair losses during maximum drawdown'); savefig('F11_drawdown_pair_losses.png')
+          safe('drawdown equilibrium',drawdown_equilibrium)
+
+          def systematic():
+              roll=rp('systematic_risk/rolling_market_exposure.parquet'); annual=rp('systematic_risk/annual_beta.parquet'); align=rp('systematic_risk/daily_market_alignment.parquet')
+              csv(annual,'T11_annual_market_exposure.csv');
+              for fname in ['full_period_capm.csv','max_drawdown_beta.csv','quadratic_market_regression.csv','systematic_risk_scorecard.csv']:
+                  p=ROOT/'systematic_risk'/fname
+                  if p.exists(): csv(pd.read_csv(p),'T11_'+fname)
+              beta=first(roll,['beta','rolling_beta','market_beta']); date=first(roll,['date','Date'])
+              if beta:
+                  x=pd.to_datetime(roll[date]) if date else pd.to_datetime(roll.index); plt.figure(figsize=(9,4.5)); plt.plot(x,pd.to_numeric(roll[beta],errors='coerce')); plt.axhline(0,linestyle='--'); plt.xlabel('Date'); plt.ylabel('Rolling beta'); plt.title('Rolling market exposure'); savefig('F12_rolling_market_beta.png')
+              sr=first(align,['strategy_return','portfolio_return','strategy_ret']); mr=first(align,['market_return','spy_return','market_ret'])
+              if sr and mr:
+                  plt.figure(figsize=(6.3,5)); plt.scatter(pd.to_numeric(align[mr],errors='coerce')*100,pd.to_numeric(align[sr],errors='coerce')*100,alpha=.45,s=14); plt.xlabel('S&P 500 daily return (%)'); plt.ylabel('Strategy daily return (%)'); plt.title('Strategy returns versus broad-market returns'); savefig('F13_strategy_vs_market_scatter.png')
+          safe('systematic risk',systematic)
+
+          def calibration():
+              tc=rp('static_convergence_calibration/trade_calibration.parquet'); hb=rp('static_convergence_calibration/horizon_bucket_calibration.parquet'); er=rp('static_convergence_calibration/exit_reason_summary.parquet')
+              csv(tc,'T12_trade_convergence_calibration.csv'); csv(hb,'T13_horizon_bucket_calibration.csv'); csv(er,'T14_exit_reason_summary.csv')
+              prob=first(tc,['selected_probability','model_probability','predicted_probability','probability']); obs=first(tc,['converged_by_selected_horizon','observed_convergence','converged'])
+              if prob and obs:
+                  q=pd.qcut(pd.to_numeric(tc[prob],errors='coerce'),q=5,duplicates='drop'); z=tc.assign(_q=q).groupby('_q',observed=False).agg(pred=(prob,'mean'),obs=(obs,'mean')).reset_index(drop=True)
+                  plt.figure(figsize=(6,5)); plt.scatter(z['pred']*100,z['obs']*100,s=55); mn=min(z['pred'].min(),z['obs'].min())*100; mx=max(z['pred'].max(),z['obs'].max())*100; plt.plot([mn,mx],[mn,mx],linestyle='--'); plt.xlabel('Mean model-implied convergence probability (%)'); plt.ylabel('Observed convergence frequency (%)'); plt.title('Convergence-probability calibration'); savefig('F14_convergence_calibration.png')
+              label=first(hb,['horizon_bucket','bucket']); mp=first(hb,['mean_model_probability','model_probability','predicted_probability']); op=first(hb,['observed_convergence_rate','observed_probability','observed_rate'])
+              if label and mp and op:
+                  x=np.arange(len(hb)); w=.38; plt.figure(figsize=(8,4.8)); plt.bar(x-w/2,pd.to_numeric(hb[mp],errors='coerce')*100,width=w,label='Model'); plt.bar(x+w/2,pd.to_numeric(hb[op],errors='coerce')*100,width=w,label='Observed'); plt.xticks(x,hb[label].astype(str),rotation=25,ha='right'); plt.ylabel('Probability / frequency (%)'); plt.title('Model-implied versus realized convergence by horizon'); plt.legend(); savefig('F15_horizon_calibration.png')
+          safe('calibration',calibration)
+
+          def alpha():
+              pl=rp('alpha_validation/pair_selection_placebos.parquet'); rt=pd.read_csv(ROOT/'alpha_validation/pair_selection_randomization_test.csv'); ma=pd.read_csv(ROOT/'alpha_validation/market_adjusted_alpha.csv'); mb=pd.read_csv(ROOT/'alpha_validation/moving_block_bootstrap.csv')
+              csv(rt,'T15_pair_selection_randomization_test.csv'); csv(ma,'T16_market_adjusted_alpha.csv'); csv(mb,'T17_moving_block_bootstrap.csv')
+              actual=float(rt.loc[rt['metric'].eq('total_return'),'actual'].iloc[0]); vals=pd.to_numeric(pl['total_return'],errors='coerce').dropna()*100
+              plt.figure(figsize=(7.5,4.8)); plt.hist(vals,bins=20,edgecolor='white'); plt.axvline(actual*100,linestyle='--',linewidth=2,label=f'Actual Top 40: {actual*100:.1f}%'); plt.xlabel('OOS total return (%)'); plt.ylabel('Placebo portfolios'); plt.title('Top-40 return versus random anti-persistent pair portfolios'); plt.legend(); savefig('F16_placebo_return_distribution.png')
+              metrics=rt.copy(); metrics['actual_percentile']=metrics['actual_percentile_vs_placebos']; plt.figure(figsize=(7,4.5)); plt.barh(metrics['metric'],metrics['actual_percentile']); plt.axvline(50,linestyle='--'); plt.xlabel('Actual percentile versus 100 placebos'); plt.title('Structural selection performance versus placebo portfolios'); savefig('F17_randomization_percentiles.png')
+          safe('alpha validation',alpha)
+
+          # Visual-pack index
+          files=[]
+          for p in sorted(FIG.glob('*.png')): files.append({'type':'figure','file':p.name})
+          for p in sorted(TAB.glob('*.csv')): files.append({'type':'table','file':p.name})
+          pd.DataFrame(files).to_csv(OUT/'visual_pack_index.csv',index=False)
+          (OUT/'errors.json').write_text(json.dumps(errors,indent=2))
+          print('Created',len(list(FIG.glob('*.png'))),'figures and',len(list(TAB.glob('*.csv'))),'tables')
+          print('Errors:',json.dumps(errors,indent=2))
+          PY
+      - name: Upload thesis visual pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: thesis-visual-pack
+          retention-days: 14
+          if-no-files-found: error
+          path: thesis_visual_pack/**

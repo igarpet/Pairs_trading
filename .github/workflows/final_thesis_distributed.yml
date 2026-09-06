@@ -52,9 +52,6 @@ jobs:
           import json
           from pathlib import Path
 
-          out = Path('workflow_executed')
-          out.mkdir(exist_ok=True)
-
           replacements = {
               '09_systematic_risk_diagnostics.ipynb': '''train_prices = pd.read_parquet("data/processed/train_prices.parquet")\ntest_prices = pd.read_parquet("data/processed/test_prices.parquet")\neligible_pairs = pd.read_parquet("data/processed/eligible_pairs.parquet")\ncointegrated_pairs = pd.read_parquet("data/processed/cointegrated_pairs.parquet")\nrf_data = pd.read_parquet("data/processed/risk_free_rates.parquet")\nrisk_free_rates = rf_data.iloc[:,0] if isinstance(rf_data,pd.DataFrame) else pd.Series(rf_data)\nrisk_free_rates.index = pd.to_datetime(risk_free_rates.index)\nrisk_free_rates = risk_free_rates.sort_index().astype(float)\ntrades = pd.read_parquet("data/processed/trades.parquet").copy()\nequity = pd.read_parquet("data/processed/equity_curve.parquet").copy()\nsummary = backtest_summary(trades, equity, 100000.0)\ndisplay(summary.to_frame("value"))\n''',
               '10_equilibrium_shift_diagnostics.ipynb': '''train_prices = pd.read_parquet("data/processed/train_prices.parquet")\ntest_prices = pd.read_parquet("data/processed/test_prices.parquet")\neligible_pairs = pd.read_parquet("data/processed/eligible_pairs.parquet")\ncointegrated_pairs = pd.read_parquet("data/processed/cointegrated_pairs.parquet")\nrf_data = pd.read_parquet("data/processed/risk_free_rates.parquet")\nrisk_free_rates = rf_data.iloc[:,0] if isinstance(rf_data,pd.DataFrame) else pd.Series(rf_data)\nrisk_free_rates.index = pd.to_datetime(risk_free_rates.index)\nrisk_free_rates = risk_free_rates.sort_index().astype(float)\ntrades = pd.read_parquet("data/processed/trades.parquet").copy()\nequity = pd.read_parquet("data/processed/equity_curve.parquet").copy()\neq = equity["equity"].astype(float)\ndd = eq/eq.cummax()-1\ntrough = dd.idxmin(); peak = eq.loc[:trough].idxmax()\nprint("Peak:", peak, "Trough:", trough, "Max DD:", float(dd.loc[trough]))\n''',
@@ -73,15 +70,17 @@ jobs:
                       hits += 1
               if hits != 1:
                   raise RuntimeError(f'{name}: expected exactly one backtest reproduction cell, found {hits}')
-              Path(out / name).write_text(json.dumps(nb, indent=1) + '\n', encoding='utf-8')
+              temp = Path('_workflow_' + name)
+              temp.write_text(json.dumps(nb, indent=1) + '\n', encoding='utf-8')
           PY
 
       - name: Execute diagnostics 09-11 from canonical saved backtest
         run: |
           set -euo pipefail
           for nb in 09_systematic_risk_diagnostics.ipynb 10_equilibrium_shift_diagnostics.ipynb 11_static_convergence_calibration.ipynb; do
-            echo "===== Running workflow_executed/$nb ====="
-            jupyter nbconvert --to notebook --execute --inplace "workflow_executed/$nb" \
+            temp="_workflow_$nb"
+            echo "===== Running $temp ====="
+            jupyter nbconvert --to notebook --execute --inplace "$temp" \
               --ExecutePreprocessor.kernel_name=python3 \
               --ExecutePreprocessor.timeout=-1
           done
@@ -98,7 +97,9 @@ jobs:
             04_convergence_signal.ipynb
             07_backtest.ipynb
             08_drawdown_diagnostics.ipynb
-            workflow_executed/**
+            _workflow_09_systematic_risk_diagnostics.ipynb
+            _workflow_10_equilibrium_shift_diagnostics.ipynb
+            _workflow_11_static_convergence_calibration.ipynb
 
   placebo:
     name: Placebo shard ${{ matrix.shard }}
@@ -189,7 +190,9 @@ jobs:
             04_convergence_signal.ipynb
             07_backtest.ipynb
             08_drawdown_diagnostics.ipynb
-            workflow_executed/**
+            _workflow_09_systematic_risk_diagnostics.ipynb
+            _workflow_10_equilibrium_shift_diagnostics.ipynb
+            _workflow_11_static_convergence_calibration.ipynb
 
       - name: Commit final processed results to main
         run: |

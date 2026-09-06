@@ -9,6 +9,6 @@ calibration_gap_observed_minus_model,-0.44632000000000005
 mean_model_probability_max_horizon,0.8569251282051281
 expiry_rate,0.7435897435897436
 brier_score_selected_horizon,0.38989901702564106
-mean_trade_return,0.06592825806745489
+mean_trade_return,0.06592825806745493
 median_trade_return,-0.03240159958386617
-total_realized_pnl,45360.48445173287
+total_realized_pnl,45360.484451732875

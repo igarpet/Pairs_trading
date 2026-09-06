@@ -1,0 +1,76 @@
+name: Apply MC 5000 patch
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply_mc5000_patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-notebooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Patch Monte Carlo path counts
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          def load(path):
+              p = Path(path)
+              return p, json.loads(p.read_text(encoding='utf-8'))
+
+          def clear_outputs(nb):
+              for cell in nb.get('cells', []):
+                  if cell.get('cell_type') == 'code':
+                      cell['execution_count'] = None
+                      cell['outputs'] = []
+
+          # Module 03 eligibility: structural T70 must use the same final MC precision.
+          p, nb = load('03_pair_eligibility.ipynb')
+          changed = False
+          for cell in nb['cells']:
+              src = ''.join(cell.get('source', []))
+              if 'N_PATHS=1000' in src:
+                  src = src.replace('N_PATHS=1000  # switch to 5000 for final run', 'N_PATHS=5000')
+                  src = src.replace('N_PATHS=1000', 'N_PATHS=5000')
+                  cell['source'] = src.splitlines(keepends=True)
+                  changed = True
+          if not changed:
+              raise RuntimeError('Could not find Module 03 N_PATHS=1000 assignment.')
+          clear_outputs(nb)
+          p.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + '\n', encoding='utf-8')
+
+          # Module 12: actual Top40 benchmark and every placebo use 5,000 paths.
+          p, nb = load('12_alpha_validation.ipynb')
+          changed = False
+          for cell in nb['cells']:
+              src = ''.join(cell.get('source', []))
+              if 'PLACEBO_SIGNAL_PATHS = 500' in src:
+                  src = src.replace('PLACEBO_SIGNAL_PATHS = 500', 'PLACEBO_SIGNAL_PATHS = 5000')
+                  changed = True
+              src = src.replace('500-path precision', '5,000-path precision')
+              src = src.replace('500 conditional fOU paths per signal', '5,000 conditional fOU paths per signal')
+              src = src.replace('500 paths per signal', '5,000 paths per signal')
+              cell['source'] = src.splitlines(keepends=True)
+          if not changed:
+              raise RuntimeError('Could not find Module 12 PLACEBO_SIGNAL_PATHS = 500 assignment.')
+          clear_outputs(nb)
+          p.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + '\n', encoding='utf-8')
+          PY
+      - name: Commit notebook updates
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add 03_pair_eligibility.ipynb 12_alpha_validation.ipynb
+          git diff --cached --quiet && exit 0
+          git commit -m 'Use 5000 Monte Carlo paths for final eligibility and placebo validation'
+          git push

@@ -45,7 +45,7 @@ def write_json(path, value):
 
 
 def source_hashes():
-    paths=list((ROOT/'src').glob('*.py'))+list((ROOT/'scripts').glob('*.py'))+[ROOT/'requirements.txt',ROOT/'METHODOLOGY.md']
+    paths=list((ROOT/'src').glob('*.py'))+list((ROOT/'scripts').glob('*.py'))+[ROOT/'requirements.txt',ROOT/'requirements-notebooks.txt',ROOT/'METHODOLOGY.md']
     return {str(p.relative_to(ROOT)):sha(p) for p in paths if p.exists()}
 
 
@@ -133,12 +133,17 @@ def backtest(run,c):
     ax.set(title='Revised synthetic option portfolio',ylabel='Model equity');fig.tight_layout();fig.savefig(run/'equity_curve.png',dpi=200);plt.close(fig)
 
 
-def validation(run,c):
+def validate_market(run,c):
     equity=pd.read_parquet(run/'equity_curve.parquet')
     aligned=aligned_returns(equity,read_series(run/'inputs/benchmark.parquet'),read_series(run/'inputs/rates.parquet'))
     save_frame(run,'market_alignment',aligned)
     write_json(run/'market_alpha.json',market_regression(aligned,c.hac_lags))
+
+def validate_bootstrap(run,c):
+    aligned=pd.read_parquet(run/'market_alignment.parquet')
     bootstrap_mean(aligned.strategy_return,c.bootstrap_blocks,c.bootstrap_replications,c.seed).to_csv(run/'bootstrap_mean.csv',index=False)
+
+def validate_placebos(run,c):
     pool=pd.read_parquet(run/'eligible_pool.parquet');top=pd.read_parquet(run/'eligible_pairs.parquet')
     actual=json.loads((run/'backtest_summary.json').read_text())
     rows=[]
@@ -167,6 +172,12 @@ def validation(run,c):
         'duplicate_draws_allowed':True,'degenerate_membership_null':len(pool)==len(top),
         'execution_order':'alphabetical pair ID for baseline and every placebo',
         'scope':'conditional descriptive reference; does not adjust all research specification searches'})
+
+
+def validation(run,c):
+    validate_market(run,c)
+    validate_bootstrap(run,c)
+    validate_placebos(run,c)
 
 
 def main(argv=None):

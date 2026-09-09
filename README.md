@@ -4,73 +4,63 @@ The current local pipeline implements methodology version 2. Read [METHODOLOGY.m
 for the exact selection, timing, sizing and statistical definitions. The previous 216-trade
 thesis outputs remain in `data/processed`; they are historical and are NOT revised results.
 
-## Install and test on Windows
+## Run in Jupyter one module at a time
 
-Use Python 3.11 or 3.12 in a new environment, from the repository root:
+Open `00_START_HERE.ipynb` for one-time dependency installation and the module guide.
+Then open each notebook below and choose **Run All**, in this order:
 
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m pytest -q
-```
+1. `01_Stock_Data.ipynb` — choose the run name and settings, load and split prices.
+2. `01_RF_Data.ipynb` — load frozen risk-free rates and check benchmark coverage.
+3. `02_Pair_Selection.ipynb` — correlation candidates and corrected cointegration screening.
+4. `03_fractional_OU.ipynb` — fit all selected spreads and inspect Hurst estimates.
+5. `03_pair_eligibility.ipynb` — structural forecasts, eligible pool and Top 40.
+6. `04_convergence_signal.ipynb` — inspect conditional forecasts on a preview date.
+7. `05_volatility_model.ipynb` — lagged EWMA volatility.
+8. `06_option_pricing.ipynb` — preview next-close synthetic option terms and sizing.
+9. `07_backtest.ipynb` — execute the full daily backtest and save trades/equity.
+10. `08_drawdown_diagnostics.ipynb` — drawdown episodes and trade-level losses.
+11. `09_systematic_risk_diagnostics.ipynb` — aligned market regression and rolling exposure.
+12. `10_equilibrium_shift_diagnostics.ipynb` — frozen spread displacement diagnostics.
+13. `11_static_convergence_calibration.ipynb` — path-based first-passage calibration.
+14. `12_alpha_validation.ipynb` — consistent alpha, bootstrap and matched placebos.
 
-If using Anaconda, create a fresh Python 3.12 environment instead, activate it and use `python`
-in place of `.\.venv\Scripts\python.exe`. Avoid installing these pinned dependencies over
-an existing project environment. There are no live data downloads in the new runner.
+Each notebook contains readable calculation cells, tables and plots. Intermediate files
+are saved automatically, so each module can use its own kernel. Run one module at a time.
+Settings and the run name are chosen only in Module 01; the active run is remembered under
+`runs/active_notebook_run.json`. Default output folder: `runs/jupyter_v2_01`.
 
-## Run locally
+Use the existing input defaults for your first run. The historical universe limitation is
+explicitly acknowledged in Module 01 and saved in the manifest. To supply improved data,
+change its price/membership paths. Their schema is described in METHODOLOGY.md.
 
-The included prices already have historical universe-selection bias. To run this usable
-but limited input, acknowledge it explicitly; that acknowledgement is saved in the manifest:
+Modules 04 and 06 are inspection snapshots, not substitutes for the daily simulation.
+Module 07 applies the same signal/pricing functions throughout the test sample. Modules
+08–11 load results without repeating the backtest. Module 12 alone simulates placebo
+portfolios; rerun that notebook after an interruption to reuse completed checkpoints.
 
-```powershell
-.\.venv\Scripts\python.exe -m scripts.run_research --run-dir runs/v2_local_01 --allow-legacy-universe
-```
+To change model settings, use a NEW RUN_NAME in Module 01. Restart the kernel after code or
+package updates. Saved input/source hashes prevent accidental mixing of experiments.
+Repeating an upstream notebook invalidates later completion flags, so continue through
+later notebooks again. Old artifacts remain available for inspection but cannot satisfy
+a missing prerequisite. No code touches the old thesis results in data/processed.
 
-This executes formation, the main backtest and 100 placebos. It can take substantial time.
-It rebuilds selection from prices; it does not reuse old cointegrated/eligible pair tables.
-Do not lower the significance threshold automatically if the corrected screen selects few
-or no pairs. Inspect `cointegration_audit.parquet` and discuss the implications first.
+If no pairs survive the corrected statistical screen, inspect the saved audit rather than
+loosening thresholds to force an attractive result. Empty one-date previews are different:
+they are valid, and you can continue to the next module.
 
-For staged execution, stop after formation to inspect the new eligible population:
+The original pre-v2 notebooks remain in Archived/pre_v2_notebooks for historical reference.
+The notebooks at the repository root are the updated executable versions. The optional
+command-line runner remains available via `python -m scripts.run_research --help`; notebook
+runs use their own saved module state and should be continued through the notebooks.
 
-```powershell
-.\.venv\Scripts\python.exe -m scripts.run_research --run-dir runs/v2_local_02 --allow-legacy-universe --stage formation
-.\.venv\Scripts\python.exe -m scripts.run_research --run-dir runs/v2_local_02 --resume --stage backtest
-.\.venv\Scripts\python.exe -m scripts.run_research --run-dir runs/v2_local_02 --resume --stage validation
-```
+## Validation and reviewing results
 
-An interrupted run can be resumed with `--resume` (same source code, environment and frozen
-inputs). Validation resumes completed placebo checkpoints. A stage that failed before a
-checkpoint is recomputed. Use a NEW directory when changing source code or configuration.
+Install `requirements-notebooks.txt` and run `python -m pytest -q` to test both the shared
+methodology code and notebook execution. CI executes a small synthetic example through
+all numbered notebooks with separate Jupyter kernels. This checks mechanics, not historical
+performance. The default full 5,000-path experiment and 100 placebos are for local execution.
 
-For different declared research settings, save a JSON file and pass `--config filename.json`
-when creating a new run. Field names are in `src/research_config.py`. Example quick mechanics
-check: `{"n_paths": 100, "n_placebos": 2, "bootstrap_replications": 200}`. Such small simulations
-are for execution checking only; they do not replace the default statistical run.
-
-For an improved data input, supply `--prices full_historical_panel.parquet --membership dated_members.csv`
-and omit `--allow-legacy-universe`. Membership schema is in METHODOLOGY.md. Default benchmark
-is the frozen S&P 500 price index in the repository. To use another series provide
-`--benchmark file.parquet --benchmark-name "accurate series description"`. It must be a single
-positive price column covering the entire OOS valuation index. `--rates` similarly takes a
-single annual-effective decimal rate column. The code does not fabricate missing constituents,
-option quotes, dividends or delisting prices.
-
-## Outputs to review together
-
-* `manifest.json`: methodology, configuration, limitations and file hashes.
-* `cointegration_audit.parquet`, `fractional_ou_parameters.parquet`, `structural_results.parquet`:
-  screening decisions and rebuilt model fits; `eligible_pool.parquet` and `eligible_pairs.parquet`
-  distinguish the full eligible universe from the selected portfolio.
-* `trades.parquet`, `equity_curve.parquet`, `skipped_signals.parquet`, `forecasts.parquet` and
-  `backtest_summary.json`: timing, costs, sizing and portfolio outcomes; `equity_curve.png`.
-* `forecast_calibration.parquet`, `calibration_summary.json` and
-  `traded_forecast_calibration_summary.json`: path-based forecast diagnostics.
-* `market_alignment.parquet`, `market_alpha.json`, `bootstrap_mean.csv`, `placebos.parquet`,
-  `placebo_comparison.csv` and `placebo_design.json`: aligned validation with explicit definitions.
-
-Send these new results for review before changing the thesis. The `runs/` directory is ignored
-by git so local outputs do not accidentally replace historical evidence. Root historical
-notebooks are now under `Archived/pre_v2_notebooks/`; use `00_run_research.ipynb` if you prefer
-a notebook. Automated CI runs only the tests and never commits result files.
+Send the entire `runs/jupyter_v2_01` output folder for review before changing the thesis.
+It includes the manifest, formation audit, fitted parameters, trades, equity, diagnostics,
+calibration and statistical comparisons. Notebook output displays are generated from those
+same files; no earlier thesis numbers are hardcoded.

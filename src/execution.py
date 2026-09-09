@@ -39,6 +39,22 @@ def budgeted_size(beta, spots, deltas, prices, budget, max_error, slippage_bps, 
                 realized_contract_ratio_ind_over_dep=ni/nd)
 
 
+def entry_option_terms(instruction, date, prices, volatility, risk_free_rates):
+    """Shared synthetic ATM terms for Module 06 and the actual execution engine."""
+    date=pd.Timestamp(date)
+    if date <= pd.Timestamp(instruction['signal_date']):
+        raise ValueError('Execution must follow the signal date.')
+    T=(pd.Timestamp(instruction['expiry_date'])-date).days/365
+    if T <= 0:raise ValueError('No remaining option maturity at execution.')
+    spots=[float(prices.at[date,instruction[l]]) for l in ('dependent','independent')]
+    vols=[float(volatility.at[date,instruction[l]]) for l in ('dependent','independent')]
+    rf=_risk_free_at(risk_free_rates,date)
+    types=option_types_from_spread_direction(instruction['direction'])
+    px=[black_scholes_price(s,s,T,rf,v,k) for s,v,k in zip(spots,vols,types)]
+    deltas=[black_scholes_delta(s,s,T,rf,v,k) for s,v,k in zip(spots,vols,types)]
+    return spots,vols,rf,types,px,deltas
+
+
 def run_backtest(train_prices, test_prices, eligible_pairs, cointegrated_pairs, risk_free_rates,
                  initial_capital=100000., entry_z=1.5, target_probability=.70,
                  memory_window=60, max_horizon_days=126, n_paths=5000, ewma_lambda=.94,
@@ -119,13 +135,7 @@ def run_backtest(train_prices, test_prices, eligible_pairs, cointegrated_pairs, 
                 continue
             pos = instruction.copy()
             # Fixed option types and horizon come from t; spots and ATM strikes from execution t+1.
-            spots = [float(test.at[date,pos[l]]) for l in ('dependent','independent')]
-            vols = [float(vol.at[date,pos[l]]) for l in ('dependent','independent')]
-            rf = _risk_free_at(risk_free_rates,date)
-            T = (pos['expiry_date']-date).days/365
-            types = option_types_from_spread_direction(pos['direction'])
-            px = [black_scholes_price(s,s,T,rf,v,k) for s,v,k in zip(spots,vols,types)]
-            deltas = [black_scholes_delta(s,s,T,rf,v,k) for s,v,k in zip(spots,vols,types)]
+            spots,vols,rf,types,px,deltas = entry_option_terms(pos,date,test,vol,risk_free_rates)
             budget = max(0.,min(cash,nav*premium_budget_fraction))
             sizing = budgeted_size(pos['beta'],spots,deltas,px,budget,max_hedge_error,slippage_bps,commission_per_contract)
             if sizing is None:

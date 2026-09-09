@@ -1,6 +1,7 @@
 # Revised synthetic pairs experiment
 
-This is methodology version 2. The canonical entry point is `python -m scripts.run_research`.
+This is methodology version 2. The primary interface is the restored numbered Jupyter notebooks.
+The optional CLI `python -m scripts.run_research` uses the same shared research functions.
 Root data files and `Archived/` describe older experiments and are never overwritten.
 The revised runner recomputes formation, execution and validation from frozen price inputs.
 It does not claim that historical results survive these changes.
@@ -141,8 +142,12 @@ alpha or correction for all strategy choices considered during research.
 Run directories are exclusive, preserve input copies, source hashes, Python/package versions,
 configuration, completed stages and output hashes. Resume rejects changed input, source,
 environment or completed outputs. Placebo results are checkpointed individually. No old
-row counts or old returns are enforced on new results. The former root notebooks and
-workflows are archived with their historic assumptions; use the new runner and notebook.
+row counts or old returns are enforced on new results. Original notebook copies and old workflows are archived with their historic assumptions.
+The root numbered notebooks are updated to this methodology. Each saves its own intermediate
+outputs and completion state. Modules 04/06 are one-date explanatory snapshots; Module 07
+recalculates daily signals and prices with the same functions. Diagnostic modules do not
+rerun the main portfolio. Notebook run manifests also hash notebook sources, excluding
+outputs and execution counts; use a new run name when changing methodology or inputs.
 Tests cover horizon events, lagged decisions, costs, budgets, position limits, frozen inputs,
 fixed orientation, deterministic ordering, statistics and no-trade/degenerate cases.
 

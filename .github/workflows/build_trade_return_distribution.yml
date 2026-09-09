@@ -1,0 +1,71 @@
+name: Build trade return distribution
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build_trade_return_distribution.yml'
+
+permissions:
+  contents: read
+
+env:
+  MPLBACKEND: Agg
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: python -m pip install pandas pyarrow matplotlib
+      - name: Build exact trade-return distribution
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+          import matplotlib.pyplot as plt
+
+          candidates = [Path('data/processed/trades.parquet'), Path('data/processed/option_trades.parquet')]
+          path = next((p for p in candidates if p.exists()), None)
+          if path is None:
+              raise FileNotFoundError('No canonical trade parquet found.')
+
+          tr = pd.read_parquet(path)
+          ret_col = next((c for c in ['trade_return','return','pnl_pct'] if c in tr.columns), None)
+          if ret_col is None:
+              raise RuntimeError(f'Could not identify trade-return column: {tr.columns.tolist()}')
+
+          vals = pd.to_numeric(tr[ret_col], errors='coerce').dropna() * 100.0
+          mean_ret = float(vals.mean())
+          median_ret = float(vals.median())
+
+          out = Path('trade_return_distribution')
+          out.mkdir(exist_ok=True)
+
+          fig, ax = plt.subplots(figsize=(8.2, 5.1))
+          ax.hist(vals, bins=35, edgecolor='white')
+          ax.axvline(0.0, linestyle='--', linewidth=1.2, label='Zero return')
+          ax.axvline(mean_ret, linestyle='-', linewidth=1.4, label=f'Mean = {mean_ret:.2f}%')
+          ax.axvline(median_ret, linestyle=':', linewidth=1.6, label=f'Median = {median_ret:.2f}%')
+          ax.set_xlabel('Trade return (%)')
+          ax.set_ylabel('Number of trades')
+          ax.set_title('Distribution of completed-trade returns')
+          ax.legend()
+          fig.tight_layout()
+          fig.savefig(out/'F10_trade_return_distribution.png', dpi=320, bbox_inches='tight')
+          pd.DataFrame({'statistic':['trades','mean_trade_return_pct','median_trade_return_pct'],
+                        'value':[len(vals),mean_ret,median_ret]}).to_csv(out/'trade_return_distribution_summary.csv', index=False)
+          print('source', path)
+          print('trades', len(vals))
+          print('mean_pct', mean_ret)
+          print('median_pct', median_ret)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trade-return-distribution
+          path: trade_return_distribution/

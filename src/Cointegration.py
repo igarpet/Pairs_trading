@@ -1,15 +1,13 @@
 """Formation-only Engle–Granger screening with a fixed orientation.
 
-The alphabetical first ticker is the dependent series. Holm correction is
-applied across ALL unordered asset pairs in the formation universe. Unscreened
-pairs and failed tests receive p=1, so data-dependent correlation filtering does
-not reduce the correction family. Inference still assumes valid I(1) EG p-values.
+The alphabetical first ticker is the dependent series. Candidate pairs are
+screened using raw Engle–Granger p-values, without multiple-testing adjustment.
+This is an individual screening rule, not a family-wise significance claim.
 """
 import numpy as np
 import pandas as pd
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools.tools import add_constant
-from statsmodels.stats.multitest import multipletests
 from statsmodels.tsa.stattools import adfuller, coint
 
 
@@ -75,10 +73,10 @@ def screen_cointegration(prices, candidate_pairs, significance=0.01,
         family_size = len(prices.columns)*(len(prices.columns)-1)//2
         if len(candidates) > family_size:
             raise ValueError('Invalid candidate pair family.')
-        all_p = np.r_[audit.pvalue.to_numpy(), np.ones(family_size-len(candidates))]
-        audit['adjusted_pvalue'] = multipletests(all_p, alpha=significance, method='holm')[1][:len(candidates)]
-        audit['selected'] = (audit.adjusted_pvalue <= significance) & audit.integration_screen & (audit.beta > 0) & audit.test_error.eq('')
-    audit['multiplicity_method'] = 'holm'
+        # Retain this legacy audit column as an explicit unadjusted alias.
+        audit['adjusted_pvalue'] = audit['pvalue']
+        audit['selected'] = (audit.pvalue <= significance) & audit.integration_screen & (audit.beta > 0) & audit.test_error.eq('')
+    audit['multiplicity_method'] = 'none'
     audit['n_candidate_tests'] = len(candidates)
     audit['n_family_tests'] = len(prices.columns)*(len(prices.columns)-1)//2
     selected = audit.loc[audit.selected.astype(bool)].reset_index(drop=True)

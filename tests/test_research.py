@@ -176,7 +176,7 @@ def test_membership_known_at_cutoff():
     assert list(a.columns)==['A','B']
 
 
-def test_cointegration_fixed_orientation_and_holm_metadata():
+def test_cointegration_fixed_orientation_and_unadjusted_metadata():
     from statsmodels.tsa.stattools import coint
     rng=np.random.default_rng(132)
     x=4+np.cumsum(rng.normal(0,.01,500));y=x+rng.normal(0,.004,500)
@@ -187,7 +187,7 @@ def test_cointegration_fixed_orientation_and_holm_metadata():
     assert a.iloc[0].pvalue==pytest.approx(pval)
     assert a.iloc[0].adf==pytest.approx(stat)
     assert a.iloc[0].adjusted_pvalue==pytest.approx(pval)
-    assert a.iloc[0].multiplicity_method=='holm'
+    assert a.iloc[0].multiplicity_method=='none'
     _,_,b=screen_cointegration(p,[('A','B'),('B','A')])
     pd.testing.assert_frame_equal(a,b)
 
@@ -250,12 +250,19 @@ def test_cli_manifest_rejects_changed_input(tmp_path,monkeypatch):
     with pytest.raises(SystemExit):cli.main(['--run-dir',str(out),'--resume'])
 
 
-def test_correlation_filter_does_not_shrink_holm_family():
+def test_raw_cointegration_selection_is_not_multiplied_by_family(monkeypatch):
     rng=np.random.default_rng(132);x=4+np.cumsum(rng.normal(0,.01,300));y=x+rng.normal(0,.02,300)
     p=pd.DataFrame({'A':np.exp(y),'B':np.exp(x),'C':np.exp(x+.1)},index=pd.bdate_range('2020-01-01',periods=300))
-    _,_,a=screen_cointegration(p,[('A','B')])
+    # A raw p=.005 passes at 1%, whereas Holm over three pairs would fail.
+    monkeypatch.setattr('src.Cointegration.coint',lambda *a,**k:(-4.,.005,[-4.,-3.,-2.]))
+    monkeypatch.setattr('src.Cointegration.adfuller',lambda v,**k:(-3.,.5 if len(v)==300 else .001,0,0,{},0))
+    selected,_,a=screen_cointegration(p,[('A','B')])
     assert a.n_family_tests.iloc[0]==3
-    assert a.adjusted_pvalue.iloc[0]==pytest.approx(min(1.,3*a.pvalue.iloc[0]))
+    assert a.adjusted_pvalue.iloc[0]==pytest.approx(.005)
+    assert a.multiplicity_method.iloc[0]=='none'
+    assert selected.pair.tolist()==['A-B']
+    rejected,_,_=screen_cointegration(p,[('A','B')],significance=.001)
+    assert rejected.empty
 
 
 def test_cached_forecasts_are_identical_to_uncached(monkeypatch):

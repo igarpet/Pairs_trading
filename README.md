@@ -11,7 +11,7 @@ Then open each notebook below and choose **Run All**, in this order:
 
 1. `01_Stock_Data.ipynb` — choose the run name and settings, load and split prices.
 2. `01_RF_Data.ipynb` — load frozen risk-free rates and check benchmark coverage.
-3. `02_Pair_Selection.ipynb` — correlation candidates and corrected cointegration screening.
+3. `02_Pair_Selection.ipynb` — correlation candidates and raw Engle–Granger screening at 1%.
 4. `03_fractional_OU.ipynb` — fit all selected spreads and inspect Hurst estimates.
 5. `03_pair_eligibility.ipynb` — structural forecasts, eligible pool and Top 40.
 6. `04_convergence_signal.ipynb` — inspect conditional forecasts on a preview date.
@@ -64,3 +64,8 @@ Send the entire `runs/jupyter_v2_01` output folder for review before changing th
 It includes the manifest, formation audit, fitted parameters, trades, equity, diagnostics,
 calibration and statistical comparisons. Notebook output displays are generated from those
 same files; no earlier thesis numbers are hardcoded.
+
+After pulling the removal of Holm selection, restart notebook kernels and choose a new
+RUN_NAME (for example `jupyter_no_holm_01`) in 01_Stock_Data. Rerun 01_Stock_Data,
+01_RF_Data and 02_Pair_Selection before continuing. Existing run manifests freeze the
+previous code, and saved notebook displays may still show the old Holm results.

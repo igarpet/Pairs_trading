@@ -89,12 +89,12 @@ nbformat.write(nb,'executing.ipynb')
     assert (out/'placebo_0000.json').read_bytes()==before
 
 
-def test_all_root_notebooks_are_clean_and_valid():
+def test_all_root_notebooks_are_valid():
     nbformat=pytest.importorskip('nbformat')
     root=Path(__file__).resolve().parents[1]
     for name in ORDER+['00_START_HERE.ipynb']:
         nb=nbformat.read(root/name,as_version=4);nbformat.validate(nb)
         code=[c for c in nb.cells if c.cell_type=='code']
         assert code
-        assert all(c.execution_count is None and c.outputs==[] for c in code)
+        # User-saved outputs are allowed; integration tests rerun source cells.
         assert all('subprocess.run' not in c.source for c in code)

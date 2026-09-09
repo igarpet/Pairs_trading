@@ -32,12 +32,13 @@ Prices represent adjusted synthetic underlying levels, not historical listed-opt
 * ADF with constant and AIC lags must fail to reject a level unit root at 5% and reject
   a unit root in first differences at 5%. This is a screening convention, not proof of I(1).
 * Engle–Granger `statsmodels.tsa.stattools.coint`, constant and AIC, supplies the residual-test
-  p-value. Holm adjustment at 1% applies across ALL unordered asset pairs in the formation
-  universe. Correlation-screened-out pairs and failed tests receive p=1. Only positive hedge ratios are supported and retained. No minimum-p orientation search.
-* Padding the full asset-pair family with p=1 for pairs not evaluated prevents the
-  correlation screen from shrinking the multiplicity penalty. Holm controls family-wise
-  error under valid underlying p-values; the I(1) assumptions and repeated research
-  specification choices remain qualifications, not a universal data-snooping correction.
+  p-value. Retain candidates with a raw p-value at or below 1%, subject to the integration
+  screen and a positive hedge ratio. No multiple-testing adjustment is applied and no
+  minimum-p orientation search is performed. Failed tests receive p=1.
+* This is individual candidate screening, not family-wise significance or a correction
+  for data snooping. The audit records `multiplicity_method='none'`; its legacy
+  `adjusted_pvalue` column equals the raw `pvalue` for compatibility. Candidate and full
+  universe pair counts are descriptive only and do not change selection thresholds.
 * fOU parameters retain the existing second-variation H and sigma estimates and continuous-time
   stationary-variance kappa estimate. Require positive sigma/variance, 0<H<0.5 and 0<kappa<2
   for stability of the daily Euler recursion. The continuous/discrete discrepancy remains a

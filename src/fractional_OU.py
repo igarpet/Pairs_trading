@@ -73,18 +73,23 @@ def standardized_spread(spread, mu, variance):
         raise ValueError('variance must be positive.')
     return ((pd.Series(spread).astype(float)-mu)/np.sqrt(variance)).rename('fou_z')
 
-def fit_cointegrated_pairs_fractional_ou(spreads, cointegrated_pairs, dependent_col='dependent', independent_col='independent', pair_col='pair', dt=1.0):
-    rows = []
+def fit_cointegrated_pairs_fractional_ou(spreads, cointegrated_pairs, dependent_col='dependent', independent_col='independent', pair_col='pair', dt=1.0, return_audit=False):
+    rows, audit = [], []
     for _, row in cointegrated_pairs.iterrows():
         dep, indep = row[dependent_col], row[independent_col]
         pair = row[pair_col] if pair_col in row.index else f'{dep}-{indep}'
         key = (dep, indep)
         if key not in spreads:
+            audit.append({'pair':pair,'status':'missing_spread','error':'Spread key absent'})
             continue
         try:
             params = estimate_fractional_ou(spreads[key], dt=dt)
         except Exception as exc:
-            print(f'Skipped {pair}: {exc}')
+            audit.append({'pair':pair,'status':'fit_error','error':str(exc)})
             continue
+        audit.append({'pair':pair,'status':'fitted','error':'',
+                      'hurst_at_clip_boundary':bool(params.hurst <= .01 or params.hurst >= .99),
+                      'daily_euler_stable':bool(0 < params.kappa < 2)})
         rows.append({'pair': pair, 'dependent': dep, 'independent': indep, **params.to_dict()})
-    return pd.DataFrame(rows).reset_index(drop=True)
+    result = pd.DataFrame(rows).reset_index(drop=True)
+    return (result,pd.DataFrame(audit)) if return_audit else result

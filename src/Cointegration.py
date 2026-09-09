@@ -1,188 +1,91 @@
-from typing import Dict, List, Tuple
+"""Formation-only Engle–Granger screening with a fixed orientation.
 
+The alphabetical first ticker is the dependent series. Holm correction is
+applied across ALL unordered asset pairs in the formation universe. Unscreened
+pairs and failed tests receive p=1, so data-dependent correlation filtering does
+not reduce the correction family. Inference still assumes valid I(1) EG p-values.
+"""
 import numpy as np
 import pandas as pd
-
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools.tools import add_constant
-from statsmodels.tsa.stattools import adfuller
-from tqdm import tqdm
+from statsmodels.stats.multitest import multipletests
+from statsmodels.tsa.stattools import adfuller, coint
 
 
-# =============================================================================
-# OLS REGRESSION
-# =============================================================================
-
-def estimate_hedge_ratio(
-    y: pd.Series,
-    x: pd.Series
-) -> Tuple[float, float, pd.Series]:
-    """
-    Estimate the hedge ratio using OLS.
-
-    Parameters
-    ----------
-    y : pd.Series
-        Dependent variable.
-
-    x : pd.Series
-        Independent variable.
-
-    Returns
-    -------
-    alpha : float
-    beta : float
-    residuals : pd.Series
-    """
-
-    X = add_constant(x)
-
-    model = OLS(y, X).fit()
-
-    alpha = model.params.iloc[0]
-    beta = model.params.iloc[1]
-
-    residuals = model.resid
-
-    return alpha, beta, residuals
+def estimate_hedge_ratio(y, x):
+    fit = OLS(y, add_constant(x, has_constant='add')).fit()
+    return float(fit.params.iloc[0]), float(fit.params.iloc[1]), fit.resid
 
 
-# =============================================================================
-# ADF TEST
-# =============================================================================
-
-def adf_test(
-    residuals: pd.Series
-) -> Tuple[float, float]:
-    """
-    Perform an Augmented Dickey-Fuller test.
-
-    Parameters
-    ----------
-    residuals : pd.Series
-
-    Returns
-    -------
-    adf_statistic : float
-    p_value : float
-    """
-
-    result = adfuller(residuals)
-
+def adf_test(residuals):
+    """Ordinary ADF diagnostic only; never use this as a cointegration p-value."""
+    result = adfuller(residuals, regression='c', autolag='AIC')
     return result[0], result[1]
 
 
-# =============================================================================
-# COINTEGRATION
-# =============================================================================
+def screen_cointegration(prices, candidate_pairs, significance=0.01,
+                         integration_alpha=0.05):
+    if not 0 < significance < 1 or not 0 < integration_alpha < 1:
+        raise ValueError('Significance levels must be in (0, 1).')
+    if not np.isfinite(prices.to_numpy()).all() or (prices <= 0).any().any():
+        raise ValueError('Formation prices must be finite and positive.')
+    logs = np.log(prices)
+    candidates = sorted(set(tuple(sorted(p)) for p in candidate_pairs))
+    unit_roots = {}
+    for ticker in sorted({t for p in candidates for t in p}):
+        x = logs[ticker]
+        try:
+            level = adfuller(x, regression='c', autolag='AIC')
+            diff = adfuller(x.diff().dropna(), regression='c', autolag='AIC')
+            unit_roots[ticker] = dict(level_p=float(level[1]), diff_p=float(diff[1]),
+                                     level_lag=int(level[2]), diff_lag=int(diff[2]),
+                                     i1=bool(level[1] >= integration_alpha and diff[1] < integration_alpha))
+        except ValueError as exc:
+            unit_roots[ticker] = dict(level_p=np.nan, diff_p=np.nan, i1=False, error=str(exc))
+    rows, spreads = [], {}
+    for dep, ind in candidates:
+        row = dict(pair=f'{dep}-{ind}', dependent=dep, independent=ind,
+                   pvalue=1.0, alpha=np.nan, beta=np.nan, adf=np.nan,
+                   trend='c', autolag='aic', maxlag='statsmodels_default',
+                   orientation='alphabetical', n_obs=len(logs),
+                   formation_start=logs.index.min(), formation_end=logs.index.max(),
+                   integration_screen=bool(unit_roots[dep]['i1'] and unit_roots[ind]['i1']),
+                   test_error='')
+        for label, ticker in [('dependent', dep), ('independent', ind)]:
+            row.update({f'{label}_{k}': v for k, v in unit_roots[ticker].items()})
+        try:
+            alpha, beta, residual = estimate_hedge_ratio(logs[dep], logs[ind])
+            stat, p, critical = coint(logs[dep], logs[ind], trend='c', autolag='aic')
+            if not np.isfinite(stat) or not np.isfinite(p):
+                raise ValueError('Degenerate or nearly collinear pair.')
+            # coint uses no constant in the residual ADF regression.
+            residual_adf = adfuller(residual, regression='n', autolag='AIC')
+            row.update(alpha=alpha, beta=beta, adf=float(stat), pvalue=float(p),
+                       residual_lag=int(residual_adf[2]), critical_1=float(critical[0]),
+                       critical_5=float(critical[1]), critical_10=float(critical[2]))
+            spreads[(dep, ind)] = residual
+        except ValueError as exc:
+            row['test_error'] = str(exc)
+        rows.append(row)
+    columns = ['pair','dependent','independent','alpha','beta','adf','pvalue',
+               'adjusted_pvalue','selected','integration_screen','test_error']
+    audit = pd.DataFrame(rows) if rows else pd.DataFrame(columns=columns)
+    if rows:
+        family_size = len(prices.columns)*(len(prices.columns)-1)//2
+        if len(candidates) > family_size:
+            raise ValueError('Invalid candidate pair family.')
+        all_p = np.r_[audit.pvalue.to_numpy(), np.ones(family_size-len(candidates))]
+        audit['adjusted_pvalue'] = multipletests(all_p, alpha=significance, method='holm')[1][:len(candidates)]
+        audit['selected'] = (audit.adjusted_pvalue <= significance) & audit.integration_screen & (audit.beta > 0) & audit.test_error.eq('')
+    audit['multiplicity_method'] = 'holm'
+    audit['n_candidate_tests'] = len(candidates)
+    audit['n_family_tests'] = len(prices.columns)*(len(prices.columns)-1)//2
+    selected = audit.loc[audit.selected.astype(bool)].reset_index(drop=True)
+    keys = set(zip(selected.dependent, selected.independent))
+    return selected, {k:v for k,v in spreads.items() if k in keys}, audit
 
-def find_cointegrated_pairs(
-    prices: pd.DataFrame,
-    candidate_pairs: List[Tuple[str, str]],
-    significance: float = 0.01
-) -> Tuple[pd.DataFrame, Dict[Tuple[str, str], pd.Series]]:
-    """
-    Test candidate pairs for Engle-Granger cointegration.
 
-    Parameters
-    ----------
-    prices : pd.DataFrame
-
-    candidate_pairs : list
-
-    significance : float
-
-    Returns
-    -------
-    results : pd.DataFrame
-
-    spreads : dict
-    """
-
-    log_prices = np.log(prices)
-
-    results = []
-
-    spreads = {}
-
-    for stock1, stock2 in tqdm(candidate_pairs):
-
-        s1 = log_prices[stock1]
-
-        s2 = log_prices[stock2]
-
-        # ------------------------------------------------------------
-        # Regression: stock1 ~ stock2
-        # ------------------------------------------------------------
-
-        alpha1, beta1, resid1 = estimate_hedge_ratio(s1, s2)
-
-        adf1, p1 = adf_test(resid1)
-
-        # ------------------------------------------------------------
-        # Regression: stock2 ~ stock1
-        # ------------------------------------------------------------
-
-        alpha2, beta2, resid2 = estimate_hedge_ratio(s2, s1)
-
-        adf2, p2 = adf_test(resid2)
-
-        # ------------------------------------------------------------
-        # Select best regression
-        # ------------------------------------------------------------
-
-        if p1 < p2:
-
-            dependent = stock1
-            independent = stock2
-
-            alpha = alpha1
-            beta = beta1
-
-            adf = adf1
-            pvalue = p1
-
-            spread = resid1
-
-        else:
-
-            dependent = stock2
-            independent = stock1
-
-            alpha = alpha2
-            beta = beta2
-
-            adf = adf2
-            pvalue = p2
-
-            spread = resid2
-
-        # ------------------------------------------------------------
-        # Keep only significant pairs
-        # ------------------------------------------------------------
-
-        if pvalue < significance:
-
-            pair = (dependent, independent)
-
-            spreads[pair] = spread
-
-            results.append({
-
-                "dependent": dependent,
-                "independent": independent,
-                "alpha": alpha,
-                "beta": beta,
-                "adf": adf,
-                "pvalue": pvalue
-
-            })
-
-    results = pd.DataFrame(results)
-
-    results = results.sort_values(
-        "pvalue",
-        ascending=True
-    ).reset_index(drop=True)
-
-    return results, spreads
+def find_cointegrated_pairs(prices, candidate_pairs, significance=0.01):
+    selected, spreads, _ = screen_cointegration(prices, candidate_pairs, significance)
+    return selected, spreads

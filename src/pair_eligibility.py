@@ -5,7 +5,7 @@ from src.convergence_signal import structural_convergence_horizon
 def filter_antipersistent_pairs(fou_parameters):
     cols = ['hurst','kappa','sigma','variance','drift_half_life']
     mask = ((fou_parameters['hurst'] > 0) & (fou_parameters['hurst'] < 0.5) &
-            (fou_parameters['kappa'] > 0) & (fou_parameters['sigma'] > 0) &
+            (fou_parameters['kappa'] > 0) & (fou_parameters['kappa'] < 2) & (fou_parameters['sigma'] > 0) &
             (fou_parameters['variance'] > 0) & np.isfinite(fou_parameters[cols]).all(axis=1))
     return fou_parameters.loc[mask].copy().reset_index(drop=True)
 
@@ -27,5 +27,5 @@ def compute_structural_t70(eligible_pairs, starting_z=1.5, target_probability=0.
 
 def select_top_pairs_by_structural_t70(structural_results, top_n=40):
     valid = structural_results[structural_results['structural_t70'].notna()].copy()
-    valid = valid.sort_values(['structural_t70','structural_probability_max'], ascending=[True,False])
+    valid = valid.sort_values(['structural_t70','structural_probability_max','pair'], ascending=[True,False,True], kind='stable')
     return valid.head(top_n).reset_index(drop=True)

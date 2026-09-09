@@ -24,62 +24,24 @@ def trading_days_between(index: pd.DatetimeIndex, start, end) -> int:
     return int(((idx > start) & (idx <= end)).sum())
 
 
-def build_trade_calibration_table(trades: pd.DataFrame, test_index: pd.DatetimeIndex) -> pd.DataFrame:
-    """Create one-row-per-trade convergence calibration diagnostics.
-
-    Primary event definition:
-      realized_within_selected_horizon = 1 only when the recorded convergence
-      exit occurs within the model-selected trading horizon.
-
-    Trades force-closed at end of test are treated as censored unless the full
-    selected horizon was observable before the test ended. Expiry trades are
-    fully observed failures because the option lived beyond the selected fOU
-    horizon by construction.
-    """
-    required = {
-        "pair", "entry_date", "exit_date", "exit_reason",
-        "convergence_horizon_trading_days", "probability_at_selected_horizon",
-        "probability_at_max_horizon", "pnl", "trade_return",
-    }
-    missing = sorted(required - set(trades.columns))
-    if missing:
-        raise KeyError(f"Trades are missing required columns: {missing}")
-
-    t = trades.copy().reset_index(drop=True)
-    t["entry_date"] = _normalize_dates(t["entry_date"])
-    t["exit_date"] = _normalize_dates(t["exit_date"])
-    idx = pd.DatetimeIndex(test_index).tz_localize(None).normalize().sort_values().unique()
-    final_date = pd.Timestamp(idx.max())
-
-    t["observed_trading_days_to_exit"] = [
-        trading_days_between(idx, a, b) for a, b in zip(t["entry_date"], t["exit_date"])
-    ]
-    t["available_trading_days_after_entry"] = [
-        trading_days_between(idx, a, final_date) for a in t["entry_date"]
-    ]
-
-    t["realized_convergence"] = (t["exit_reason"].astype(str) == "convergence").astype(int)
-    t["realized_within_selected_horizon"] = (
-        (t["realized_convergence"] == 1)
-        & (t["observed_trading_days_to_exit"] <= t["convergence_horizon_trading_days"].astype(int))
-    ).astype(int)
-
-    t["selected_horizon_assessable"] = (
-        (t["exit_reason"].astype(str) != "end_of_test")
-        | (t["available_trading_days_after_entry"] >= t["convergence_horizon_trading_days"].astype(int))
-    )
-    t["censored_end_of_test"] = ~t["selected_horizon_assessable"]
-
-    p = t["probability_at_selected_horizon"].astype(float).clip(0.0, 1.0)
-    y = t["realized_within_selected_horizon"].astype(float)
-    t["calibration_error"] = y - p
-    t["brier_component"] = (y - p) ** 2
-    return t
+def build_trade_calibration_table(trades, test_index, prices=None):
+    """Require actual spread paths; exit reasons cannot identify first passages."""
+    from src.forecast_calibration import label_forecasts
+    if prices is None:
+        raise ValueError('Calibration now requires prices=full_prices; exit reasons alone are insufficient.')
+    result = label_forecasts(trades, prices)
+    if result.empty:
+        return result
+    result['realized_convergence'] = result['event_status'].eq('success').astype(int)
+    result['censored_end_of_test'] = result['event_status'].eq('censored')
+    result['observed_trading_days_to_exit'] = [
+        trading_days_between(prices.index,a,b) for a,b in zip(result.entry_date,result.exit_date)]
+    return result
 
 
 def calibration_summary(calibration: pd.DataFrame) -> pd.Series:
     """Headline calibration statistics on assessable trades."""
-    d = calibration.loc[calibration["selected_horizon_assessable"]].copy()
+    d = calibration.loc[calibration["complete_horizon_observed"]].copy()
     if d.empty:
         raise ValueError("No assessable trades for calibration.")
 
@@ -91,7 +53,7 @@ def calibration_summary(calibration: pd.DataFrame) -> pd.Series:
     return pd.Series({
         "n_total_trades": int(len(calibration)),
         "n_assessable_selected_horizon": int(len(d)),
-        "n_censored_end_of_test": int((~calibration["selected_horizon_assessable"]).sum()),
+        "n_censored_end_of_test": int((~calibration["complete_horizon_observed"]).sum()),
         "mean_model_probability_selected_horizon": float(p.mean()),
         "observed_convergence_rate": float(conv.mean()),
         "observed_convergence_within_selected_horizon": float(y.mean()),
@@ -124,7 +86,7 @@ def exit_reason_summary(calibration: pd.DataFrame) -> pd.DataFrame:
 
 def horizon_bucket_summary(calibration: pd.DataFrame, n_bins: int = 4) -> pd.DataFrame:
     """Calibration by selected-horizon quartile (or fewer bins if necessary)."""
-    d = calibration.loc[calibration["selected_horizon_assessable"]].copy()
+    d = calibration.loc[calibration["complete_horizon_observed"]].copy()
     if d.empty:
         return pd.DataFrame()
     q = min(int(n_bins), int(d["convergence_horizon_trading_days"].nunique()))

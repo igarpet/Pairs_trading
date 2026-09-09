@@ -1,15 +1,8 @@
-"""Canonical local CLI. No network calls and no writes to historical outputs."""
+"""Shared research functions and optional fixed-folder command-line execution."""
 from __future__ import annotations
 import argparse
-from dataclasses import fields
-from datetime import datetime, timezone
-import hashlib
-import importlib.metadata
 import json
 from pathlib import Path
-import platform
-import shutil
-import subprocess
 import sys
 
 # Supports both python -m scripts.run_research and python scripts/run_research.py.
@@ -28,10 +21,6 @@ from src.forecast_calibration import label_forecasts, summarize_forecasts
 from src.research_validation import aligned_returns,market_regression,bootstrap_mean,placebo_samples,portfolio_metrics,compare_placebos
 
 
-def sha(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
 def write_json(path, value):
     def clean(x):
         if isinstance(x,dict):return {str(k):clean(v) for k,v in x.items()}
@@ -42,15 +31,6 @@ def write_json(path, value):
     path=Path(path); tmp=path.with_suffix(path.suffix+'.tmp')
     tmp.write_text(json.dumps(clean(value),indent=2,default=str,allow_nan=False)+'\n')
     tmp.replace(path)
-
-
-def source_hashes():
-    paths=list((ROOT/'src').glob('*.py'))+list((ROOT/'scripts').glob('*.py'))+[ROOT/'requirements.txt',ROOT/'requirements-notebooks.txt',ROOT/'METHODOLOGY.md']
-    return {str(p.relative_to(ROOT)):sha(p) for p in paths if p.exists()}
-
-
-def environment():
-    return {'python':platform.python_version(),'packages':{p:importlib.metadata.version(p) for p in ['numpy','pandas','scipy','statsmodels','pyarrow']}}
 
 
 def save_frame(run,name,frame):
@@ -72,10 +52,10 @@ def backtest_kwargs(c):
     return {k:getattr(c,k) for k in names}
 
 
-def formation(run,c,manifest):
+def formation(run,c,allow_legacy=True):
     p=pd.read_parquet(run/'inputs/prices.parquet')
     m=pd.read_csv(run/'inputs/membership.csv') if (run/'inputs/membership.csv').exists() else None
-    train,test,availability=prepare_prices(p,c,m,manifest['allow_legacy_universe'])
+    train,test,availability=prepare_prices(p,c,m,allow_legacy)
     for name,frame in [('train_prices',train),('test_prices',test),('availability',availability)]:save_frame(run,name,frame)
     # Validate benchmark/rates before expensive selection and simulations.
     rf=read_series(run/'inputs/rates.parquet'); benchmark=read_series(run/'inputs/benchmark.parquet')
@@ -85,7 +65,7 @@ def formation(run,c,manifest):
     print(f'Formation: {len(train)} sessions, {len(train.columns)} assets, {len(candidates)} candidates',flush=True)
     selected,spreads,audit=screen_cointegration(train,candidates,c.cointegration_alpha,c.integration_alpha)
     save_frame(run,'cointegration_audit',audit);save_frame(run,'cointegrated_pairs',selected)
-    print(f'{len(selected)} pairs pass Holm-adjusted cointegration and integration screens',flush=True)
+    print(f'{len(selected)} pairs pass raw-p-value cointegration and integration screens',flush=True)
     if selected.empty:raise ValueError('No selected pairs. Audit saved; do not relax thresholds based on OOS results.')
     fou,fit_audit=fit_cointegrated_pairs_fractional_ou(spreads,selected,return_audit=True)
     save_frame(run,'fou_fit_audit',fit_audit)
@@ -147,21 +127,15 @@ def validate_placebos(run,c):
     pool=pd.read_parquet(run/'eligible_pool.parquet');top=pd.read_parquet(run/'eligible_pairs.parquet')
     actual=json.loads((run/'backtest_summary.json').read_text())
     rows=[]
-    signal_cache={}  # Same frozen run; reusable forecasts do not depend on holdings or portfolio membership.
+    signal_cache={}  # Reuse forecasts only within this invocation.
+    # Recompute on every invocation; stale results never enter a new comparison.
+    for old in run.glob('placebo_[0-9][0-9][0-9][0-9].json'):
+        old.unlink()
     for j,sample in placebo_samples(pool,len(top),c.n_placebos,c.seed):
-        # Each completed portfolio is checkpointed for an interrupted long run.
-        out=run/f'placebo_{j:04d}.json'
         pairs=sample.pair.tolist()
-        if out.exists():
-            row=json.loads(out.read_text())
-            if row['sampled_pairs']!=pairs:raise ValueError('Placebo checkpoint sample mismatch.')
-        else:
-            row={**portfolio_metrics(load_backtest(run,c,sample,signal_cache),c.initial_capital),
-                 'placebo_id':j,'sampled_pairs':pairs,'seed':c.seed}
-            write_json(out,row)
-            checkpoint_manifest=json.loads((run/'manifest.json').read_text())
-            checkpoint_manifest.setdefault('checkpoint_hashes',{})[out.name]=sha(out)
-            write_json(run/'manifest.json',checkpoint_manifest)
+        row={**portfolio_metrics(load_backtest(run,c,sample,signal_cache),c.initial_capital),
+             'placebo_id':j,'sampled_pairs':pairs,'seed':c.seed}
+        write_json(run/f'placebo_{j:04d}.json',row)
         rows.append(row)
         print(f'Placebo {j+1}/{c.n_placebos} completed',flush=True)
     frame=pd.DataFrame(rows)
@@ -181,73 +155,23 @@ def validation(run,c):
 
 
 def main(argv=None):
+    from src import project_io as io
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--run-dir',type=Path,required=True)
     p.add_argument('--stage',choices=['all','formation','backtest','validation'],default='all')
-    p.add_argument('--resume',action='store_true')
     p.add_argument('--prices',type=Path,default=ROOT/'data/processed/prices.parquet')
     p.add_argument('--rates',type=Path,default=ROOT/'data/processed/risk_free_rates.parquet')
     p.add_argument('--benchmark',type=Path,default=ROOT/'data/processed/systematic_risk/sp500_prices.parquet')
-    p.add_argument('--benchmark-name',default='S&P 500 price index ^GSPC')
     p.add_argument('--membership',type=Path)
-    p.add_argument('--allow-legacy-universe',action='store_true')
-    p.add_argument('--config',type=Path,help='JSON overrides to ResearchConfig; saved once per run')
-    args=p.parse_args(argv);run=args.run_dir.resolve()
-    legacy=(ROOT/'data').resolve()
-    if run==ROOT or run==legacy or legacy in run.parents:
-        p.error('Use a NEW runs/<id> directory; never write into historical data.')
-    manifest_path=run/'manifest.json'
-    if args.resume:
-        manifest=json.loads(manifest_path.read_text())
-        if args.config: p.error('Resume uses frozen config; start a new run to change it.')
-        if manifest['source_hashes']!=source_hashes() or manifest['environment']!=environment():
-            p.error('Code/environment changed since run creation; use a new run directory.')
-        for name,checksum in manifest['input_hashes'].items():
-            if sha(run/name)!=checksum:p.error(f'Input changed: {name}')
-        for name,checksum in {**manifest.get('output_hashes',{}),**manifest.get('checkpoint_hashes',{})}.items():
-            if sha(run/name)!=checksum:p.error(f'Completed output changed: {name}')
-        c=ResearchConfig(**manifest['config']).validate()
+    p.add_argument('--config',type=Path,help='JSON settings overrides for formation')
+    args=p.parse_args(argv)
+    if args.stage in ['all','formation']:
+        c=ResearchConfig(**(json.loads(args.config.read_text()) if args.config else {})).validate()
+        io.initialize(c,args.prices,args.rates,args.benchmark,args.membership)
     else:
-        if args.stage not in ['all','formation']:p.error('Start with formation or all; later stages need --resume.')
-        overrides=json.loads(args.config.read_text()) if args.config else {}
-        c=ResearchConfig(**overrides).validate()
-        if not args.membership and not args.allow_legacy_universe:p.error('Supply --membership or acknowledge --allow-legacy-universe.')
-        if run.exists():p.error('Run directory already exists; use --resume or a new directory.')
-        for path in [args.prices,args.rates,args.benchmark]+([args.membership] if args.membership else []):
-            if not path.is_file():p.error(f'Missing input: {path}')
-        (run/'inputs').mkdir(parents=True)
-        files={'prices.parquet':args.prices,'rates.parquet':args.rates,'benchmark.parquet':args.benchmark}
-        if args.membership:files['membership.csv']=args.membership
-        for name,path in files.items():shutil.copyfile(path,run/'inputs'/name)
-        try:commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
-        except (OSError,subprocess.CalledProcessError):commit='unknown'
-        manifest={'methodology_version':2,'created_utc':datetime.now(timezone.utc).isoformat(),
-                  'code_commit':commit,'source_hashes':source_hashes(),'environment':environment(),
-                  'config':c.to_dict(),'allow_legacy_universe':args.allow_legacy_universe,
-                  'universe_status':'legacy_preselected_survivorship_and_availability_bias' if not args.membership else 'user_supplied_dated_membership',
-                  'benchmark_name':args.benchmark_name,'option_data':'synthetic_adjusted_spot_European_q0',
-                  'input_sources':{name:str(path.resolve()) for name,path in files.items()},
-                  'input_hashes':{'inputs/'+name:sha(run/'inputs'/name) for name in files},'completed_stages':[]}
-        write_json(manifest_path,manifest)
-    stages=['formation','backtest','validation'] if args.stage=='all' else [args.stage]
-    for stage in stages:
-        if stage in manifest['completed_stages']:continue
-        previous={'backtest':'formation','validation':'backtest'}.get(stage)
-        if previous and previous not in manifest['completed_stages']:p.error(f'Complete {previous} first.')
-        manifest['active_stage']=stage;manifest['status']='running';write_json(manifest_path,manifest)
-        try:
-            formation(run,c,manifest) if stage == 'formation' else globals()[stage](run,c)
-        except Exception as exc:
-            manifest['checkpoint_hashes']=json.loads(manifest_path.read_text()).get('checkpoint_hashes',{})
-            manifest['status']='failed';manifest['error']=str(exc);write_json(manifest_path,manifest)
-            raise
-        if stage=='validation':
-            manifest['checkpoint_hashes']=json.loads(manifest_path.read_text()).get('checkpoint_hashes',{})
-        manifest['completed_stages'].append(stage);manifest['status']='completed';manifest.pop('error',None)
-        manifest['output_hashes']={str(f.relative_to(run)):sha(f) for f in sorted(run.glob('*')) if f.is_file() and f.name!='manifest.json'}
-        import pyarrow.parquet as pq
-        manifest['output_table_rows']={f.name:pq.read_metadata(f).num_rows for f in run.glob('*.parquet')}
-        write_json(manifest_path,manifest)
-        print(f'Completed {stage}: {run}',flush=True)
+        if args.config:p.error('Change settings in formation, then rerun the later stages.')
+        c=io.load_config()
+    for stage in (['formation','backtest','validation'] if args.stage=='all' else [args.stage]):
+        globals()[stage](io.OUTPUT_DIR,c)
+        print(f'Completed {stage}: {io.OUTPUT_DIR}',flush=True)
 
 if __name__=='__main__':main()

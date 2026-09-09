@@ -70,11 +70,10 @@ nbformat.write(nb,'executing.ipynb')
         notebook=nbformat.read(repo/name,as_version=4)
         nbformat.validate(notebook)
         execute(notebook)
-        nbformat.write(notebook,repo/name)  # Executed outputs must not invalidate source hashes.
-    out=repo/'runs/jupyter_v2_01'
-    manifest=json.loads((out/'manifest.json').read_text())
-    assert len(manifest['completed_modules'])==14
-    assert manifest['module_status']=='completed'
+        nbformat.write(notebook,repo/name)  # Saving executed notebooks must not block later modules.
+    out=repo/'data/processed/current'
+    assert not (out/'manifest.json').exists()
+    assert not (repo/'runs').exists()
     trades=pd.read_parquet(out/'trades.parquet')
     eq=pd.read_parquet(out/'equity_curve.parquet')
     assert len(trades)>0
@@ -83,10 +82,17 @@ nbformat.write(nb,'executing.ipynb')
     assert len(pd.read_parquet(out/'placebos.parquet'))==2
     assert (out/'equilibrium_shift_metrics.parquet').exists()
     assert (out/'traded_forecast_calibration.parquet').exists()
-    before=(out/'placebo_0000.json').read_bytes()
+    # Poison old output: a fresh Module 12 must recompute rather than reuse it.
+    (out/'placebo_0000.json').write_text('{\"sampled_pairs\": [\"stale\"]}')
     last=nbformat.read(repo/ORDER[-1],as_version=4)
     execute(last)
-    assert (out/'placebo_0000.json').read_bytes()==before
+    assert json.loads((out/'placebo_0000.json').read_text())['sampled_pairs']!=['stale']
+    # Notebook edits and repeated upstream execution need no new identity.
+    first=nbformat.read(repo/ORDER[0],as_version=4)
+    first.cells.append(nbformat.v4.new_markdown_cell('Edited notebook'))
+    nbformat.write(first,repo/ORDER[0])
+    execute(first)
+    execute(nbformat.read(repo/ORDER[1],as_version=4))
 
 
 def test_all_root_notebooks_are_valid():
@@ -98,3 +104,4 @@ def test_all_root_notebooks_are_valid():
         assert code
         # User-saved outputs are allowed; integration tests rerun source cells.
         assert all('subprocess.run' not in c.source for c in code)
+        assert all('NotebookSession' not in c.source and 'RUN_NAME' not in c.source for c in code)

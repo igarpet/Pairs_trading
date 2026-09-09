@@ -1,15 +1,11 @@
 # Pairs Trading
 
-The current local pipeline implements methodology version 2. Read [METHODOLOGY.md](METHODOLOGY.md)
-for the exact selection, timing, sizing and statistical definitions. The previous 216-trade
-thesis outputs remain in `data/processed`; they are historical and are NOT revised results.
+## Run in Jupyter
 
-## Run in Jupyter one module at a time
+Use a Python 3.12 kernel. Open `00_START_HERE.ipynb` for dependency installation,
+then choose **Run All** in each notebook below, one at a time.
 
-Open `00_START_HERE.ipynb` for one-time dependency installation and the module guide.
-Then open each notebook below and choose **Run All**, in this order:
-
-1. `01_Stock_Data.ipynb` — choose the run name and settings, load and split prices.
+1. `01_Stock_Data.ipynb` — choose settings, load and split prices.
 2. `01_RF_Data.ipynb` — load frozen risk-free rates and check benchmark coverage.
 3. `02_Pair_Selection.ipynb` — correlation candidates and raw Engle–Granger screening at 1%.
 4. `03_fractional_OU.ipynb` — fit all selected spreads and inspect Hurst estimates.
@@ -24,48 +20,41 @@ Then open each notebook below and choose **Run All**, in this order:
 13. `11_static_convergence_calibration.ipynb` — path-based first-passage calibration.
 14. `12_alpha_validation.ipynb` — consistent alpha, bootstrap and matched placebos.
 
-Each notebook contains readable calculation cells, tables and plots. Intermediate files
-are saved automatically, so each module can use its own kernel. Run one module at a time.
-Settings and the run name are chosen only in Module 01; the active run is remembered under
-`runs/active_notebook_run.json`. Default output folder: `runs/jupyter_v2_01`.
 
-Use the existing input defaults for your first run. The historical universe limitation is
-explicitly acknowledged in Module 01 and saved in the manifest. To supply improved data,
-change its price/membership paths. Their schema is described in METHODOLOGY.md.
+## Simple shared files
 
-Modules 04 and 06 are inspection snapshots, not substitutes for the daily simulation.
-Module 07 applies the same signal/pricing functions throughout the test sample. Modules
-08–11 load results without repeating the backtest. Module 12 alone simulates placebo
-portfolios; rerun that notebook after an interruption to reuse completed checkpoints.
+All intermediate tables and results go to **data/processed/current/**. Each module
+loads the files it needs and overwrites its own outputs. Settings are chosen in
+01_Stock_Data and saved as ordinary settings.json for subsequent modules.
+There are no run names, manifests, source/environment hashes or completion flags.
+You can close Jupyter, restart a kernel, edit a notebook, and continue using the saved files.
 
-To change model settings, use a NEW RUN_NAME in Module 01. Restart the kernel after code or
-package updates. Saved input/source hashes prevent accidental mixing of experiments.
-Repeating an upstream notebook invalidates later completion flags, so continue through
-later notebooks again. Old artifacts remain available for inspection but cannot satisfy
-a missing prerequisite. No code touches the old thesis results in data/processed.
+After changing inputs, settings or upstream calculations, rerun the affected module and
+its downstream modules to refresh their files. Existing files are not automatically
+checked for freshness. Run one notebook at a time. Copy the current folder elsewhere
+if you want to keep a particular set of results before overwriting them.
 
-If no pairs survive the corrected statistical screen, inspect the saved audit rather than
-loosening thresholds to force an attractive result. Empty one-date previews are different:
-they are valid, and you can continue to the next module.
+Module 01 copies the selected local inputs into current/inputs and overwrites those
+copies each time. The original data/processed source files and old thesis results remain
+available. Missing required files produce a normal message to run the producing module.
 
-The original pre-v2 notebooks remain in Archived/pre_v2_notebooks for historical reference.
-The notebooks at the repository root are the updated executable versions. The optional
-command-line runner remains available via `python -m scripts.run_research --help`; notebook
-runs use their own saved module state and should be continued through the notebooks.
+Modules 04 and 06 are one-date previews; empty previews are valid. Module 07 computes
+signals and option prices throughout the test period. Modules 08–11 read the saved
+backtest. Module 12 recomputes every placebo draw on each execution, using the current
+files and settings. It never resumes old checkpoints.
 
-## Validation and reviewing results
+The included stock universe remains historically filtered and options remain model-valued.
+Selection uses raw Engle–Granger p-values at 1%, with no Holm adjustment. See
+METHODOLOGY.md for the research definitions. No surviving pairs is a possible research
+outcome, not a file-management error.
 
-Install `requirements-notebooks.txt` and run `python -m pytest -q` to test both the shared
-methodology code and notebook execution. CI executes a small synthetic example through
-all numbered notebooks with separate Jupyter kernels. This checks mechanics, not historical
-performance. The default full 5,000-path experiment and 100 placebos are for local execution.
+## Tests and results
 
-Send the entire `runs/jupyter_v2_01` output folder for review before changing the thesis.
-It includes the manifest, formation audit, fitted parameters, trades, equity, diagnostics,
-calibration and statistical comparisons. Notebook output displays are generated from those
-same files; no earlier thesis numbers are hardcoded.
+Install requirements-notebooks.txt and run `python -m pytest -q`. CI executes a synthetic
+example through all numbered notebooks with separate kernels. The full historical
+experiment remains for local execution. Send data/processed/current/ for review before
+updating the thesis. Saved notebook displays may show earlier results until rerun.
 
-After pulling the removal of Holm selection, restart notebook kernels and choose a new
-RUN_NAME (for example `jupyter_no_holm_01`) in 01_Stock_Data. Rerun 01_Stock_Data,
-01_RF_Data and 02_Pair_Selection before continuing. Existing run manifests freeze the
-previous code, and saved notebook displays may still show the old Holm results.
+The optional `python -m scripts.run_research` uses the same fixed folder. Its `--stage`
+option supports formation, backtest or validation without run identifiers or resume flags.
+Archived notebooks and workflows are historical references, not current entry points.

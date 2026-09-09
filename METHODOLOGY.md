@@ -10,8 +10,8 @@ It does not claim that historical results survive these changes.
 
 The default price input already contains a historically filtered 466-stock universe.
 Its original survivorship and full-sample availability biases CANNOT be undone by filtering
-it again. `--allow-legacy-universe` is required to run that input, and the limitation is
-written to the manifest. This is the immediately runnable, explicitly limited experiment.
+it again. Module 01 explicitly sets `ALLOW_LEGACY_UNIVERSE=True` for that input;
+this choice is saved in settings.json. The optional CLI uses the same default. This is the immediately runnable, explicitly limited experiment.
 For improved universe formation, supply a full historical price panel and dated membership
 CSV with `ticker,member_from,member_to,known_at`. `member_to` is exclusive (blank means open).
 Membership is frozen at the formation cutoff. A later exit from the index does not trigger
@@ -140,25 +140,24 @@ alpha or correction for all strategy choices considered during research.
 
 ## Reproducibility and acceptance
 
-Run directories are exclusive, preserve input copies, source hashes, Python/package versions,
-configuration, completed stages and output hashes. Resume rejects changed input, source,
-environment or completed outputs. Placebo results are checkpointed individually. No old
-row counts or old returns are enforced on new results. Original notebook copies and old workflows are archived with their historic assumptions.
-The root numbered notebooks are updated to this methodology. Each saves its own intermediate
-outputs and completion state. Modules 04/06 are one-date explanatory snapshots; Module 07
-recalculates daily signals and prices with the same functions. Diagnostic modules do not
-rerun the main portfolio. Notebook run manifests also hash notebook sources, excluding
-outputs and execution counts; use a new run name when changing methodology or inputs.
-Tests cover horizon events, lagged decisions, costs, budgets, position limits, frozen inputs,
-fixed orientation, deterministic ordering, statistics and no-trade/degenerate cases.
+The numbered notebooks use one fixed folder, `data/processed/current/`. Module 01
+writes ordinary input copies and settings.json; later modules read those settings and
+saved tables. Rerunning a module overwrites its outputs. There are no named runs,
+manifest checks, environment/source hashes or completion-state gates. After changing
+inputs or upstream calculations, rerun the dependent modules; freshness is not enforced.
+Preserve an experiment by copying the results folder before rerunning it.
 
-A full formation/backtest/100-placebo run is intentionally left for local execution. After
-reviewing it, update the thesis from THAT run's artifacts. Additional experiments should
-change configuration into new directories (for example path counts/seeds, costs, memory
-windows, risk budgets). Do not tune against OOS returns and present the same sample as
-untouched evidence. No matched rolling-recalibration robustness claim exists until a new,
-explicit rolling experiment is implemented and evaluated.
+Modules 04/06 are one-date explanatory snapshots; Module 07 recalculates daily signals
+and prices with the same functions. Diagnostics do not rerun the main portfolio.
+Module 12 recomputes every placebo portfolio from current inputs on each invocation;
+it does not reuse old checkpoints. In-memory forecast caching applies only within
+that invocation. Tests cover horizon events, lagged decisions, costs, budgets, position
+limits, fixed orientation, deterministic ordering, statistics, independent notebook
+execution, overwriting settings and no-trade/degenerate cases.
+
+The full historical experiment is left for local execution. Review the current outputs
+before updating the thesis. Do not tune against OOS returns and present the same sample
+as untouched evidence. Rolling recalibration remains a separate, unimplemented experiment.
 
 References for the implemented APIs:
 * https://www.statsmodels.org/stable/generated/statsmodels.tsa.stattools.coint.html
-* https://www.statsmodels.org/stable/generated/statsmodels.stats.multitest.multipletests.html

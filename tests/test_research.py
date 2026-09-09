@@ -233,21 +233,23 @@ def test_legacy_calibration_fails_without_paths():
     with pytest.raises(ValueError,match='requires prices'):build_trade_calibration_table(pd.DataFrame(),pd.DatetimeIndex([]))
 
 
-def test_cli_manifest_rejects_changed_input(tmp_path,monkeypatch):
-    from scripts import run_research as cli
-    train,test,_,_=prices_fixture();p=pd.concat([train,test]);prices=tmp_path/'prices.parquet';p.to_parquet(prices)
-    rates=tmp_path/'rates.parquet';pd.DataFrame({'rate':.03},index=p.index).to_parquet(rates)
-    bench=tmp_path/'benchmark.parquet';p[['B']].to_parquet(bench)
-    config=tmp_path/'c.json';config.write_text(json.dumps({'train_fraction':110/130}))
-    monkeypatch.setattr(cli,'formation',lambda run,c,m: (run/'done.txt').write_text('done'))
-    out=tmp_path/'run'
-    args=['--run-dir',str(out),'--stage','formation','--prices',str(prices),'--rates',str(rates),'--benchmark',str(bench),'--config',str(config),'--allow-legacy-universe']
-    cli.main(args)
-    m=json.loads((out/'manifest.json').read_text())
-    assert m['completed_stages']==['formation']
-    cli.main(['--run-dir',str(out),'--resume','--stage','formation'])
-    with (out/'inputs/prices.parquet').open('ab') as f:f.write(b'changed')
-    with pytest.raises(SystemExit):cli.main(['--run-dir',str(out),'--resume'])
+def test_fixed_settings_and_inputs_can_be_overwritten(tmp_path,monkeypatch):
+    from src import project_io as io
+    monkeypatch.setattr(io,'OUTPUT_DIR',tmp_path/'current')
+    train,test,_,_=prices_fixture();prices=tmp_path/'prices.parquet'
+    pd.concat([train,test]).to_parquet(prices)
+    rates=tmp_path/'rates.parquet';pd.DataFrame({'rate':[.03]}).to_parquet(rates)
+    member=tmp_path/'membership.csv';member.write_text('ticker,member_from,member_to,known_at\n')
+    io.initialize(ResearchConfig(),prices,rates,rates,member)
+    pd.DataFrame({'A':[123.]}).to_parquet(prices)
+    io.initialize(ResearchConfig(entry_z=2.),prices,rates,rates)
+    assert io.load_config().entry_z==2.
+    assert pd.read_parquet(io.OUTPUT_DIR/'inputs/prices.parquet').A.iloc[0]==123.
+    assert not (io.OUTPUT_DIR/'inputs/membership.csv').exists()
+    assert not (io.OUTPUT_DIR/'manifest.json').exists()
+    io.save_frame('example',pd.DataFrame({'x':[1]}))
+    io.save_frame('example',pd.DataFrame({'x':[2]}))
+    assert io.load_frame('example').x.iloc[0]==2
 
 
 def test_raw_cointegration_selection_is_not_multiplied_by_family(monkeypatch):
@@ -276,7 +278,7 @@ def test_cached_forecasts_are_identical_to_uncached(monkeypatch):
     pd.testing.assert_frame_equal(a['trades'],b['trades'])
 
 
-def test_unmocked_full_cli_pipeline(tmp_path):
+def test_unmocked_full_cli_pipeline(tmp_path,monkeypatch):
     from scripts.run_research import main
     from src.convergence_signal import simulate_unconditional_fou_paths
     idx=pd.bdate_range('2020-01-01',periods=400)
@@ -289,13 +291,13 @@ def test_unmocked_full_cli_pipeline(tmp_path):
     cfg=tmp_path/'cfg.json';cfg.write_text(json.dumps(dict(memory_window=10,structural_horizon=30,
         max_horizon_days=20,n_paths=100,n_placebos=2,bootstrap_replications=100,entry_z=.5)))
     out=tmp_path/'complete'
-    main(['--run-dir',str(out),'--prices',str(prices),'--rates',str(rates),'--benchmark',str(bench),
-          '--config',str(cfg),'--allow-legacy-universe'])
-    m=json.loads((out/'manifest.json').read_text())
-    assert m['completed_stages']==['formation','backtest','validation']
+    from src import project_io as io
+    monkeypatch.setattr(io,'OUTPUT_DIR',out)
+    main(['--prices',str(prices),'--rates',str(rates),'--benchmark',str(bench),
+          '--config',str(cfg)])
+    assert not (out/'manifest.json').exists()
     tr=pd.read_parquet(out/'trades.parquet');eq=pd.read_parquet(out/'equity_curve.parquet')
     assert len(tr)>0
     assert eq.equity.iloc[-1]==pytest.approx(100000+tr.pnl.sum())
-    assert m['output_table_rows']['trades.parquet']==len(tr)
-    assert len(m['checkpoint_hashes'])==2
-    main(['--run-dir',str(out),'--resume'])
+    assert len(pd.read_parquet(out/'placebos.parquet'))==2
+    main(['--stage','validation'])

@@ -19,7 +19,7 @@ class ResearchConfig:
     seed: int = 42
     ewma_lambda: float = 0.94
     max_open_pairs: int = 10
-    premium_budget_fraction: float = 0.05
+    premium_budget_fraction: float = 1.0  # Full available cash; no per-position equity cap.
     max_hedge_error: float = 0.10
     slippage_bps: float = 10.0
     commission_per_contract: float = 0.65

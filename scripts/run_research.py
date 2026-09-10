@@ -110,7 +110,7 @@ def backtest(run,c):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     fig,ax=plt.subplots(figsize=(9,4));result['equity_curve'].equity.plot(ax=ax)
-    ax.set(title='Revised synthetic option portfolio',ylabel='Model equity');fig.tight_layout();fig.savefig(run/'equity_curve.png',dpi=200);plt.close(fig)
+    ax.set(title='Synthetic option portfolio',ylabel='Model equity');fig.tight_layout();fig.savefig(run/'equity_curve.png',dpi=200);plt.close(fig)
 
 
 def validate_market(run,c):

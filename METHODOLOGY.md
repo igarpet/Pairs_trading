@@ -89,8 +89,11 @@ NAV uses model mid values; realized PnL includes entry and exit costs. Cash earn
 long premiums are fully cash-funded, no borrowing, and equity starts at the first OOS close
 with initial capital before any fill.
 
-Each entry's all-in debit is bounded by the lesser of available cash and 5% of pre-entry
-marked portfolio equity. An integer search maximizes invested debit subject to both legs
+Each entry's all-in debit is bounded by available cash. The default premium budget
+fraction is 1.0, so there is no additional per-position equity cap. The maximum number
+of simultaneously open pairs is ten; this does not reserve cash for ten positions.
+Alphabetical entry processing can allocate nearly all cash to the first feasible pair.
+An integer search maximizes invested debit subject to both legs
 having at least one contract and at most 10% relative delta-dollar hedge error; ties prefer
 lower error and fewer contracts. If no feasible pair exists, skip and log it. Hedge matching
 uses the original log-spread derivative ratio. Budgets cap premium loss, not all portfolio

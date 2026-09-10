@@ -1,0 +1,46 @@
+name: Research module 12
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/research_module_12.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: historical-research-12
+  cancel-in-progress: false
+env:
+  PYTHONUNBUFFERED: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+jobs:
+  alpha-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 9133fd93f8322a45d6b3c455d45f9991acf1953d
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements-notebooks.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: modules-01-11-notebooks-and-results
+          github-token: ${{ github.token }}
+          run-id: 34416498563
+          path: .
+      - name: Module 12 alpha validation
+        run: python scripts/execute_notebooks.py 12_alpha_validation.ipynb
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: modules-01-12-notebooks-and-results
+          path: |
+            *.ipynb
+            data/processed/current/
+          retention-days: 30

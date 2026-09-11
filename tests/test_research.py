@@ -69,8 +69,8 @@ def test_default_allocation_can_use_full_cash(monkeypatch):
     monkeypatch.setattr('src.execution.calculate_convergence_signal', fake_signal)
     train, test, pairs, c = prices_fixture()
     cfg = ResearchConfig().validate()
-    assert cfg.premium_budget_fraction == 1.0
-    assert cfg.max_open_pairs == 10
+    assert cfg.premium_budget_fraction == .05
+    assert cfg.max_open_pairs is None
     result = run_backtest(train, test, pairs, c, .03)
     first = result['trades'].iloc[0]
     assert first.entry_budget == pytest.approx(cfg.initial_capital)

@@ -65,16 +65,16 @@ def test_decisions_do_not_use_execution_day_close(monkeypatch):
     assert a.entry_dependent_spot!=b.entry_dependent_spot
 
 
-def test_default_allocation_can_use_full_cash(monkeypatch):
+def test_default_allocation_respects_ten_percent_equity_cap(monkeypatch):
     monkeypatch.setattr('src.execution.calculate_convergence_signal', fake_signal)
     train, test, pairs, c = prices_fixture()
     cfg = ResearchConfig().validate()
-    assert cfg.premium_budget_fraction == 1.0
+    assert cfg.premium_budget_fraction == .10
     assert cfg.max_open_pairs == 10
     result = run_backtest(train, test, pairs, c, .03)
     first = result['trades'].iloc[0]
-    assert first.entry_budget == pytest.approx(cfg.initial_capital)
-    assert first.entry_premium > .95 * cfg.initial_capital
+    assert first.entry_budget == pytest.approx(.10 * cfg.initial_capital)
+    assert first.entry_premium > .09 * cfg.initial_capital
     assert first.entry_premium <= first.entry_budget + 1e-8
     assert result['equity_curve'].cash.min() >= -1e-7
 

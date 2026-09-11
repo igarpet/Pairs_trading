@@ -1,4 +1,4 @@
-name: Research $1 million — Modules 01–12
+name: Research $100k — 5 percent per trade, unlimited positions
 # Run accounting tests against the configured initial capital before research.
 on:
   workflow_dispatch:

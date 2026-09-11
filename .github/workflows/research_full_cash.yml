@@ -1,4 +1,5 @@
 name: Research $1 million — Modules 01–12
+# Run accounting tests against the configured initial capital before research.
 on:
   workflow_dispatch:
   push:

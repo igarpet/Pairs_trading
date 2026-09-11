@@ -45,10 +45,10 @@ def test_next_close_budget_costs_and_exact_maturity(monkeypatch):
         assert row.entry_cost>0
     eq=r['equity_curve']
     assert (eq.cash>=0).all()
-    assert eq.equity.iloc[0]==100000
+    assert eq.equity.iloc[0]==ResearchConfig().initial_capital
     assert eq.n_open_positions.max()<=10
     assert eq.open_position_value.iloc[-1]==0
-    assert eq.equity.iloc[-1]==pytest.approx(100000+tr.pnl.sum())
+    assert eq.equity.iloc[-1]==pytest.approx(ResearchConfig().initial_capital+tr.pnl.sum())
     assert eq.equity.equals(eq.cash+eq.open_position_value)
 
 
@@ -124,8 +124,8 @@ def test_no_trades_and_immediate_horizon(monkeypatch):
     monkeypatch.setattr('src.execution.calculate_convergence_signal',signal)
     train,test,pairs,c=prices_fixture();r=run_backtest(train,test,pairs,c,.03)
     assert r['trades'].empty
-    assert r['equity_curve'].equity.eq(100000).all()
-    assert backtest_summary(r['trades'],r['equity_curve'],100000)['total_return']==0
+    assert r['equity_curve'].equity.eq(ResearchConfig().initial_capital).all()
+    assert backtest_summary(r['trades'],r['equity_curve'],ResearchConfig().initial_capital)['total_return']==0
 
 
 def event_fixture():
@@ -312,6 +312,6 @@ def test_unmocked_full_cli_pipeline(tmp_path,monkeypatch):
     assert not (out/'manifest.json').exists()
     tr=pd.read_parquet(out/'trades.parquet');eq=pd.read_parquet(out/'equity_curve.parquet')
     assert len(tr)>0
-    assert eq.equity.iloc[-1]==pytest.approx(100000+tr.pnl.sum())
+    assert eq.equity.iloc[-1]==pytest.approx(ResearchConfig().initial_capital+tr.pnl.sum())
     assert len(pd.read_parquet(out/'placebos.parquet'))==2
     main(['--stage','validation'])

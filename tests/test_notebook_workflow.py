@@ -77,7 +77,9 @@ nbformat.write(nb,'executing.ipynb')
     trades=pd.read_parquet(out/'trades.parquet')
     eq=pd.read_parquet(out/'equity_curve.parquet')
     assert len(trades)>0
-    assert eq.equity.iloc[-1]==pytest.approx(100000+trades.pnl.sum())
+    from src.research_config import ResearchConfig
+    assert eq.equity.iloc[0]==ResearchConfig().initial_capital
+    assert eq.equity.iloc[-1]==pytest.approx(ResearchConfig().initial_capital+trades.pnl.sum())
     assert (trades.entry_date>trades.signal_date).all()
     assert len(pd.read_parquet(out/'placebos.parquet'))==2
     assert (out/'equilibrium_shift_metrics.parquet').exists()

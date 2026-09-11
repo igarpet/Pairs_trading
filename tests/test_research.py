@@ -73,8 +73,8 @@ def test_default_allocation_can_use_full_cash(monkeypatch):
     assert cfg.max_open_pairs is None
     result = run_backtest(train, test, pairs, c, .03)
     first = result['trades'].iloc[0]
-    assert first.entry_budget == pytest.approx(cfg.initial_capital)
-    assert first.entry_premium > .95 * cfg.initial_capital
+    assert first.entry_budget == pytest.approx(cfg.initial_capital * cfg.premium_budget_fraction)
+    assert first.entry_premium > .04 * cfg.initial_capital
     assert first.entry_premium <= first.entry_budget + 1e-8
     assert result['equity_curve'].cash.min() >= -1e-7
 

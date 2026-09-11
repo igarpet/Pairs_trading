@@ -58,7 +58,7 @@ def entry_option_terms(instruction, date, prices, volatility, risk_free_rates):
 def run_backtest(train_prices, test_prices, eligible_pairs, cointegrated_pairs, risk_free_rates,
                  initial_capital=1000000., entry_z=1.5, target_probability=.70,
                  memory_window=60, max_horizon_days=126, n_paths=5000, ewma_lambda=.94,
-                 seed=42, max_open_pairs=10, premium_budget_fraction=1.0,
+                 seed=42, max_open_pairs=None, premium_budget_fraction=0.05,
                  max_hedge_error=.10, slippage_bps=10., commission_per_contract=.65, signal_cache=None):
     from src.research_config import ResearchConfig
     ResearchConfig(initial_capital=initial_capital,entry_z=entry_z,target_probability=target_probability,
@@ -128,7 +128,7 @@ def run_backtest(train_prices, test_prices, eligible_pairs, cointegrated_pairs, 
             instruction = pending[pair]
             reason = None
             if pair in opened: reason = 'already_open'
-            elif len(opened) >= max_open_pairs: reason = 'max_open_pairs'
+            elif max_open_pairs is not None and len(opened) >= max_open_pairs: reason = 'max_open_pairs'
             elif date >= instruction['expiry_date']: reason = 'no_remaining_maturity'
             elif date == test.index[-1]: reason = 'last_session'
             if reason:
@@ -195,7 +195,7 @@ def run_backtest(train_prices, test_prices, eligible_pairs, cointegrated_pairs, 
                     continue
                 pending[row.pair] = rec
         mark = sum(quote(p,date)[0] for p in opened.values())
-        if cash < -1e-7 or len(opened)>max_open_pairs:
+        if cash < -1e-7 or (max_open_pairs is not None and len(opened)>max_open_pairs):
             raise AssertionError('Cash or concurrency invariant failed.')
         equity.append(dict(date=date,cash=cash,open_position_value=mark,equity=cash+mark,n_open_positions=len(opened)))
     trade_columns = ['pair','entry_date','exit_date','exit_reason','pnl','trade_return','entry_premium']

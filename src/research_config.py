@@ -18,8 +18,8 @@ class ResearchConfig:
     n_paths: int = 5000
     seed: int = 42
     ewma_lambda: float = 0.94
-    max_open_pairs: int = 10
-    premium_budget_fraction: float = 1.0  # Use available cash without borrowing.
+    max_open_pairs: int | None = None
+    premium_budget_fraction: float = 0.05
     max_hedge_error: float = 0.10
     slippage_bps: float = 10.0
     commission_per_contract: float = 0.65
@@ -34,10 +34,12 @@ class ResearchConfig:
         if not 0 < self.cointegration_alpha < 1 or not 0 < self.integration_alpha < 1:
             raise ValueError('Invalid statistical significance level.')
         for key in ('top_n','correlation_neighbors','memory_window','structural_horizon',
-                    'max_horizon_days','n_paths','max_open_pairs','bootstrap_replications'):
+                    'max_horizon_days','n_paths','bootstrap_replications'):
             value = getattr(self,key)
             if not isinstance(value,int) or value < 1:
                 raise ValueError(f'{key} must be a positive integer.')
+        if self.max_open_pairs is not None and (not isinstance(self.max_open_pairs,int) or self.max_open_pairs < 1):
+            raise ValueError('max_open_pairs must be positive or None.')
         if self.n_placebos < 0 or self.hac_lags < 0 or self.seed < 0:
             raise ValueError('Counts, seed and lags must be nonnegative.')
         if self.initial_capital <= 0 or not 0 < self.premium_budget_fraction <= 1:

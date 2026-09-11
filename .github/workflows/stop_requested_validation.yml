@@ -14,9 +14,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          state=$(gh api repos/igarpet/Pairs_trading/actions/runs/34623040134 --jq .status)
+          state=$(gh api repos/igarpet/Pairs_trading/actions/runs/34626951028 --jq .status)
           if [ "$state" != "completed" ]; then
-            gh api --method POST repos/igarpet/Pairs_trading/actions/runs/34623040134/cancel
+            gh api --method POST repos/igarpet/Pairs_trading/actions/runs/34626951028/cancel
           else
             echo 'Research run has already completed.'
           fi

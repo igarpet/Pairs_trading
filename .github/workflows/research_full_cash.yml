@@ -1,4 +1,4 @@
-name: Research available cash — maximum 10 open trades
+name: Research $1 million — Modules 01–12
 on:
   workflow_dispatch:
   push:

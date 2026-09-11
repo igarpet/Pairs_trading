@@ -58,7 +58,7 @@ def entry_option_terms(instruction, date, prices, volatility, risk_free_rates):
 def run_backtest(train_prices, test_prices, eligible_pairs, cointegrated_pairs, risk_free_rates,
                  initial_capital=100000., entry_z=1.5, target_probability=.70,
                  memory_window=60, max_horizon_days=126, n_paths=5000, ewma_lambda=.94,
-                 seed=42, max_open_pairs=10, premium_budget_fraction=0.10,
+                 seed=42, max_open_pairs=10, premium_budget_fraction=1.0,
                  max_hedge_error=.10, slippage_bps=10., commission_per_contract=.65, signal_cache=None):
     from src.research_config import ResearchConfig
     ResearchConfig(initial_capital=initial_capital,entry_z=entry_z,target_probability=target_probability,

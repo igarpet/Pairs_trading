@@ -1,4 +1,4 @@
-name: Research full cash allocation
+name: Research available cash — maximum 10 open trades
 on:
   workflow_dispatch:
   push:

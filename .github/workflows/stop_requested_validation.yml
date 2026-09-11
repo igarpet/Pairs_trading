@@ -1,0 +1,22 @@
+name: Stop requested validation
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/stop_requested_validation.yml]
+permissions:
+  actions: write
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel requested research run if still active
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          state=$(gh api repos/igarpet/Pairs_trading/actions/runs/34623040134 --jq .status)
+          if [ "$state" != "completed" ]; then
+            gh api --method POST repos/igarpet/Pairs_trading/actions/runs/34623040134/cancel
+          else
+            echo 'Research run has already completed.'
+          fi

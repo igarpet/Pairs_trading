@@ -9,7 +9,7 @@ class ResearchConfig:
     cointegration_alpha: float = 0.01
     integration_alpha: float = 0.05
     top_n: int = 40
-    initial_capital: float = 100000.0
+    initial_capital: float = 1000000.0
     entry_z: float = 1.5
     target_probability: float = 0.70
     memory_window: int = 60

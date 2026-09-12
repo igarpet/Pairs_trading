@@ -6,6 +6,7 @@ statsmodels==0.14.6
 pyarrow==19.0.1
 matplotlib==3.10.1
 tqdm==4.67.1
+yfinance==0.2.65
 
 # Jupyter kernel and notebook execution support; the user can keep their existing Jupyter frontend.
 ipykernel==6.29.5

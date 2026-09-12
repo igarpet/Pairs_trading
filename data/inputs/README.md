@@ -1,6 +1,8 @@
 # Input data
 
-The files preserve the supplied dataset; notebooks do not download replacements.
+These files preserve the supplied dataset for reference. Module 01 now downloads
+data online and does not read these files. The descriptions below refer only to
+this archived dataset, not to the downloaded universe.
 
 | File | Content |
 |---|---|

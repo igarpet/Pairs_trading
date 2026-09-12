@@ -5,10 +5,13 @@ define identical numerical and execution rules for the strategy and placebos.
 
 ## Data and inference scope
 
-The default price input already contains a historically filtered 466-stock universe.
-Its original survivorship and full-sample availability biases CANNOT be undone by filtering
-it again. Module 01 explicitly sets `ALLOW_LEGACY_UNIVERSE=True` for that input;
-this flag is set explicitly in the notebook. This is the immediately runnable, explicitly limited experiment.
+Module 01 downloads the current S&P 500 constituents CSV from
+https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv
+and Yahoo Finance adjusted closes, with explicit start and exclusive end dates.
+The current constituent snapshot introduces survivorship bias; it is not historical
+membership. The notebook explicitly permits this limited universe with
+`allow_legacy=True`. Missing full histories stop execution for inspection, and
+formation-only availability screening follows. Vendor revisions may affect fresh downloads.
 For improved universe formation, supply a full historical price panel and dated membership
 CSV with `ticker,member_from,member_to,known_at`. `member_to` is exclusive (blank means open).
 Membership is frozen at the formation cutoff. A later exit from the index does not trigger
@@ -116,11 +119,12 @@ claim is made for overlapping forecasts.
 
 ## Benchmark and uncertainty
 
-The default benchmark is the saved ^GSPC price-index series (not SPY or a total-return index).
-It covers the first OOS valuation date. The supplied benchmark is read from its explicit filename;
-no network call occurs during finalization. The annual risk-free input is explicitly treated
-as effective decimal, converted to (1+r)^(1/252)-1 using the prior-session value for each
-return interval. Historical rate-source quote conventions remain a data assumption.
+Module 01_RF_Data downloads the ^GSPC price index from Yahoo Finance (not SPY or a
+total-return index), and Yahoo's ^IRX 13-week Treasury bill yields.
+The latter are discount-basis yields in percent; division by 100 supplies an annual
+decimal yield treated as an effective-rate proxy, not an exact realized Treasury return.
+Downstream notebooks read these generated files. Daily rates are calculated as
+(1+r)^(1/252)-1 using the prior-session value for each return interval.
 All market analysis uses one saved aligned excess-return table and HAC with five lags.
 Daily alpha is simply multiplied by 252 for its labelled annualized display; its significance
 is unchanged. Degenerate and insufficient-data regressions report status instead of a

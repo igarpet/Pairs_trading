@@ -28,8 +28,15 @@ No startup notebook, test folder, workflow or automatic executor is required.
 
 ## Files and settings
 
+Module 01_Stock_Data downloads the S&P 500 constituents from the supplied GitHub
+CSV and adjusted prices from Yahoo Finance. Edit START_DATE and END_DATE there
+(defaults: 2016-01-01 through 2025-12-31). It performs the chronological 70/30 split.
+Module 01_RF_Data downloads Yahoo's ^IRX Treasury yields and ^GSPC index
+for the required dates. Both modules require internet access; neither loads the
+old market-data files in `data/inputs/`.
+
 Insert or edit filenames directly in each notebook's loading and saving cells.
-The supplied inputs are in `data/inputs/`. Generated files default to the notebook
+Generated files default to the notebook
 working folder: for example, `train_prices.parquet`, `trades.parquet` and
 `equity_curve.parquet`. If you choose other filenames or locations, change the
 matching reads in subsequent notebooks. Create any destination folders yourself.
@@ -69,6 +76,8 @@ data files produced by earlier modules and can execute in a fresh kernel.
 
 See `METHODOLOGY.md` and `data/inputs/README.md` for model, data and inference
 limitations. Options are model-valued, not historical listed-option quotes.
+The downloaded constituents are a current snapshot, so historical survivorship
+bias remains. Fresh downloads can also reflect vendor revisions.
 
 ## AI assistance
 

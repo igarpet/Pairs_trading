@@ -1,13 +1,11 @@
-name: Research modules 01 through 11
+name: Research notebooks
+# Run accounting tests against the configured initial capital before research.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: [.github/workflows/research_modules_01_11.yml]
 permissions:
   contents: read
 concurrency:
-  group: historical-research-01-11
+  group: research-notebooks
   cancel-in-progress: false
 env:
   PYTHONUNBUFFERED: '1'
@@ -15,7 +13,18 @@ env:
   OMP_NUM_THREADS: '1'
   MKL_NUM_THREADS: '1'
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q
   formation:
+    needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -24,10 +33,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: python -m pip install -r requirements-notebooks.txt
+      - run: python -m pip install -r requirements.txt
+      - name: Clear generated outputs
+        run: rm -rf data/processed/current
       - name: Modules 01 through 06
         run: >-
-          python scripts/execute_notebooks.py
+          python execute_notebooks.py
           01_Stock_Data.ipynb 01_RF_Data.ipynb 02_Pair_Selection.ipynb
           03_fractional_OU.ipynb 03_pair_eligibility.ipynb
           04_convergence_signal.ipynb 05_volatility_model.ipynb 06_option_pricing.ipynb
@@ -49,13 +60,13 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: python -m pip install -r requirements-notebooks.txt
+      - run: python -m pip install -r requirements.txt
       - uses: actions/download-artifact@v4
         with:
           name: formation-notebooks-and-data
           path: .
       - name: Module 07 backtest
-        run: python scripts/execute_notebooks.py 07_backtest.ipynb
+        run: python execute_notebooks.py 07_backtest.ipynb
       - name: Publish backtest summary immediately
         if: always()
         run: |
@@ -87,20 +98,45 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: python -m pip install -r requirements-notebooks.txt
+      - run: python -m pip install -r requirements.txt
       - uses: actions/download-artifact@v4
         with:
           name: module-07-notebooks-and-results
           path: .
       - name: Modules 08 through 11
         run: >-
-          python scripts/execute_notebooks.py
+          python execute_notebooks.py
           08_drawdown_diagnostics.ipynb 09_systematic_risk_diagnostics.ipynb
           10_equilibrium_shift_diagnostics.ipynb 11_static_convergence_calibration.ipynb
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: modules-01-11-notebooks-and-results
+          path: |
+            *.ipynb
+            data/processed/current/
+          retention-days: 30
+  alpha-validation:
+    needs: diagnostics
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: modules-01-11-notebooks-and-results
+          path: .
+      - name: Module 12 alpha validation
+        run: python execute_notebooks.py 12_alpha_validation.ipynb
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: modules-01-12-notebooks-and-results
           path: |
             *.ipynb
             data/processed/current/

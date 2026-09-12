@@ -1,5 +1,0 @@
--r requirements.txt
-# Jupyter kernel and notebook execution support; the user can keep their existing Jupyter frontend.
-ipykernel==6.29.5
-nbformat==5.10.4
-nbclient==0.10.2

@@ -1,17 +1,14 @@
-# Revised synthetic pairs experiment
+# Synthetic pairs experiment
 
-This is methodology version 2. The primary interface is the restored numbered Jupyter notebooks.
-The optional CLI `python -m scripts.run_research` uses the same shared research functions.
-Root data files and `Archived/` describe older experiments and are never overwritten.
-The revised runner recomputes formation, execution and validation from frozen price inputs.
-It does not claim that historical results survive these changes.
+The numbered notebooks are the analysis entry points. Shared functions in `src/`
+define identical numerical and execution rules for the strategy and placebos.
 
 ## Data and inference scope
 
 The default price input already contains a historically filtered 466-stock universe.
 Its original survivorship and full-sample availability biases CANNOT be undone by filtering
 it again. Module 01 explicitly sets `ALLOW_LEGACY_UNIVERSE=True` for that input;
-this choice is saved in settings.json. The optional CLI uses the same default. This is the immediately runnable, explicitly limited experiment.
+this choice is saved in settings.json. This is the immediately runnable, explicitly limited experiment.
 For improved universe formation, supply a full historical price panel and dated membership
 CSV with `ticker,member_from,member_to,known_at`. `member_to` is exclusive (blank means open).
 Membership is frozen at the formation cutoff. A later exit from the index does not trigger
@@ -69,7 +66,7 @@ and the declared sample end are used for maturity, never future prices.
 Convergence is checked at close t for an existing position and executed at close t+1.
 Known maturity settles intrinsically at expiry; final forced liquidation occurs at the
 last observed close. A forecast event and an executed exit are distinct records. One
-position per pair and at most ten total are enforced. Simultaneous instructions use
+position per pair is enforced; there is no numeric total-position cap. Simultaneous instructions use
 alphabetical pair order for baseline and placebos. No same-close signal-and-fill path exists.
 
 ## Option model and capital
@@ -89,10 +86,10 @@ NAV uses model mid values; realized PnL includes entry and exit costs. Cash earn
 long premiums are fully cash-funded, no borrowing, and equity starts at the first OOS close
 with initial capital before any fill.
 
-Each entry's all-in debit is bounded by available cash. The default premium budget
-fraction is 1.0, so there is no additional per-position equity cap. The maximum number
-of simultaneously open pairs is ten; this does not reserve cash for ten positions.
-Alphabetical entry processing can allocate nearly all cash to the first feasible pair.
+Initial equity is $100,000. Each entry's all-in debit is bounded by the smaller of
+available cash and 5% of equity marked before that session's entries. There is no
+numeric cap on simultaneously open pairs. One position per pair is allowed.
+Cash is not reserved for a fixed number of positions.
 An integer search maximizes invested debit subject to both legs
 having at least one contract and at most 10% relative delta-dollar hedge error; ties prefer
 lower error and fewer contracts. If no feasible pair exists, skip and log it. Hedge matching
@@ -120,7 +117,7 @@ claim is made for overlapping forecasts.
 ## Benchmark and uncertainty
 
 The default benchmark is the saved ^GSPC price-index series (not SPY or a total-return index).
-It covers the first OOS valuation date. Files and benchmark identity are frozen and hashed;
+It covers the first OOS valuation date. The supplied benchmark is copied with the other inputs;
 no network call occurs during finalization. The annual risk-free input is explicitly treated
 as effective decimal, converted to (1+r)^(1/252)-1 using the prior-session value for each
 return interval. Historical rate-source quote conventions remain a data assumption.
@@ -158,9 +155,17 @@ that invocation. Tests cover horizon events, lagged decisions, costs, budgets, p
 limits, fixed orientation, deterministic ordering, statistics, independent notebook
 execution, overwriting settings and no-trade/degenerate cases.
 
-The full historical experiment is left for local execution. Review the current outputs
+The full historical experiment can be executed locally or through the research workflow. Review the current outputs
 before updating the thesis. Do not tune against OOS returns and present the same sample
 as untouched evidence. Rolling recalibration remains a separate, unimplemented experiment.
 
 References for the implemented APIs:
 * https://www.statsmodels.org/stable/generated/statsmodels.tsa.stattools.coint.html
+
+## Research selection limitation
+
+Allocation settings were examined using results from this evaluation period. It must
+not be described as an untouched confirmatory test of the final allocation rule.
+The conditional placebo comparison and bootstrap do not adjust for that specification
+search. Independent future or otherwise untouched data would be needed for confirmatory
+evaluation. See README.md for the scope of AI assistance.

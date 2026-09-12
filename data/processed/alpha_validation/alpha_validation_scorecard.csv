@@ -1,4 +1,0 @@
-test,reject_null_at_5pct,evidence
-HAC positive alpha,False,"alpha=0.001043/day, one-sided p=0.2426"
-20-day moving-block bootstrap,False,"95% CI daily mean=[-0.001466, 0.003446]"
-Structural Top40 pair-selection placebo,False,"actual return=27.713%, randomization p=0.1287"

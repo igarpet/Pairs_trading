@@ -1,7 +1,6 @@
-"""Synthetic European option primitives and the canonical v2 backtest entry point.
+"""Synthetic European option primitives and the shared backtest entry point.
 
 See METHODOLOGY.md for timing, risk budgets and forecast event definitions.
-Historical same-close code is preserved in Archived/backtest_pre_v2.py.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ import zlib
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-
 
 
 TRADING_DAYS_PER_YEAR = 252
@@ -109,7 +107,7 @@ def _risk_free_at(
 
     s = pd.Series(risk_free_rates).dropna().astype(float).sort_index()
     s.index = pd.to_datetime(s.index).normalize()
-    available = s.loc[:pd.Timestamp(date).normalize()]
+    available = s.loc[: pd.Timestamp(date).normalize()]
     if available.empty:
         raise ValueError(f"No risk-free rate available on or before {date}.")
     return float(available.iloc[-1])
@@ -203,8 +201,16 @@ def _prepare_pair_parameters(
     p = e.merge(needed_c, on="pair", how="left", validate="one_to_one")
 
     required = {
-        "pair", "dependent", "independent", "alpha", "beta",
-        "mu", "kappa", "sigma", "hurst", "variance",
+        "pair",
+        "dependent",
+        "independent",
+        "alpha",
+        "beta",
+        "mu",
+        "kappa",
+        "sigma",
+        "hurst",
+        "variance",
     }
     missing = sorted(required - set(p.columns))
     if missing:
@@ -220,6 +226,7 @@ def _prepare_pair_parameters(
 def run_walk_forward_backtest(*args, **kwargs):
     """Canonical v2 next-close synthetic engine. See METHODOLOGY.md."""
     from src.execution import run_backtest
+
     return run_backtest(*args, **kwargs)
 
 
@@ -245,14 +252,17 @@ def backtest_summary(
         avg_trade_return = float(trades["trade_return"].mean())
         median_trade_return = float(trades["trade_return"].median())
 
-    return pd.Series({
-        "initial_capital": float(initial_capital),
-        "final_equity": float(eq.iloc[-1]),
-        "total_return": float(eq.iloc[-1] / initial_capital - 1.0),
-        "max_drawdown": float(drawdown.min()),
-        "n_trades": int(len(trades)),
-        "win_rate": wins,
-        "average_trade_return": avg_trade_return,
-        "median_trade_return": median_trade_return,
-        "max_concurrent_positions": int(equity_curve["n_open_positions"].max()),
-    }, name="module_07_summary")
+    return pd.Series(
+        {
+            "initial_capital": float(initial_capital),
+            "final_equity": float(eq.iloc[-1]),
+            "total_return": float(eq.iloc[-1] / initial_capital - 1.0),
+            "max_drawdown": float(drawdown.min()),
+            "n_trades": int(len(trades)),
+            "win_rate": wins,
+            "average_trade_return": avg_trade_return,
+            "median_trade_return": median_trade_return,
+            "max_concurrent_positions": int(equity_curve["n_open_positions"].max()),
+        },
+        name="module_07_summary",
+    )

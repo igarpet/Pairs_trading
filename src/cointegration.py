@@ -1,9 +1,4 @@
-"""Formation-only Engle–Granger screening with a fixed orientation.
-
-The alphabetical first ticker is the dependent series. Candidate pairs are
-screened using raw Engle–Granger p-values, without multiple-testing adjustment.
-This is an individual screening rule, not a family-wise significance claim.
-"""
+"""Formation-only Engle-Granger screening with a fixed orientation."""
 
 from typing import List, Tuple
 import numpy as np
@@ -19,14 +14,11 @@ def estimate_hedge_ratio(y, x):
 
 
 def screen_cointegration(prices, candidate_pairs, significance=0.01, integration_alpha=0.05):
-    if not 0 < significance < 1 or not 0 < integration_alpha < 1:
-        raise ValueError("Significance levels must be in (0, 1).")
-    if not np.isfinite(prices.to_numpy()).all() or (prices <= 0).any().any():
-        raise ValueError("Formation prices must be finite and positive.")
     logs = np.log(prices)
     candidates = sorted(set(tuple(sorted(p)) for p in candidate_pairs))
     unit_roots = {}
-    for ticker in sorted({t for p in candidates for t in p}):
+
+    for ticker in sorted({t for pair in candidates for t in pair}):
         x = logs[ticker]
         try:
             level = adfuller(x, regression="c", autolag="AIC")
@@ -40,6 +32,7 @@ def screen_cointegration(prices, candidate_pairs, significance=0.01, integration
             )
         except ValueError as exc:
             unit_roots[ticker] = dict(level_p=np.nan, diff_p=np.nan, i1=False, error=str(exc))
+
     rows, spreads = [], {}
     for dep, ind in candidates:
         row = dict(
@@ -62,18 +55,18 @@ def screen_cointegration(prices, candidate_pairs, significance=0.01, integration
         )
         for label, ticker in [("dependent", dep), ("independent", ind)]:
             row.update({f"{label}_{k}": v for k, v in unit_roots[ticker].items()})
+
         try:
             alpha, beta, residual = estimate_hedge_ratio(logs[dep], logs[ind])
-            stat, p, critical = coint(logs[dep], logs[ind], trend="c", autolag="aic")
-            if not np.isfinite(stat) or not np.isfinite(p):
+            stat, pvalue, critical = coint(logs[dep], logs[ind], trend="c", autolag="aic")
+            if not np.isfinite(stat) or not np.isfinite(pvalue):
                 raise ValueError("Degenerate or nearly collinear pair.")
-            # coint uses no constant in the residual ADF regression.
             residual_adf = adfuller(residual, regression="n", autolag="AIC")
             row.update(
                 alpha=alpha,
                 beta=beta,
                 adf=float(stat),
-                pvalue=float(p),
+                pvalue=float(pvalue),
                 residual_lag=int(residual_adf[2]),
                 critical_1=float(critical[0]),
                 critical_5=float(critical[1]),
@@ -82,7 +75,9 @@ def screen_cointegration(prices, candidate_pairs, significance=0.01, integration
             spreads[(dep, ind)] = residual
         except ValueError as exc:
             row["test_error"] = str(exc)
+
         rows.append(row)
+
     columns = [
         "pair",
         "dependent",
@@ -97,11 +92,8 @@ def screen_cointegration(prices, candidate_pairs, significance=0.01, integration
         "test_error",
     ]
     audit = pd.DataFrame(rows) if rows else pd.DataFrame(columns=columns)
+
     if rows:
-        family_size = len(prices.columns) * (len(prices.columns) - 1) // 2
-        if len(candidates) > family_size:
-            raise ValueError("Invalid candidate pair family.")
-        # Retain this legacy audit column as an explicit unadjusted alias.
         audit["adjusted_pvalue"] = audit["pvalue"]
         audit["selected"] = (
             (audit.pvalue <= significance)
@@ -109,46 +101,29 @@ def screen_cointegration(prices, candidate_pairs, significance=0.01, integration
             & (audit.beta > 0)
             & audit.test_error.eq("")
         )
+
     audit["multiplicity_method"] = "none"
     audit["n_candidate_tests"] = len(candidates)
     audit["n_family_tests"] = len(prices.columns) * (len(prices.columns) - 1) // 2
     selected = audit.loc[audit.selected.astype(bool)].reset_index(drop=True)
     keys = set(zip(selected.dependent, selected.independent))
-    return selected, {k: v for k, v in spreads.items() if k in keys}, audit
+    return selected, {key: value for key, value in spreads.items() if key in keys}, audit
 
 
 def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
-    "Daily log returns: log(P_t / P_(t-1))."
-
-    if prices.isnull().values.any():
-        raise ValueError("Prices contain NaN values.")
-
-    returns = np.log(prices / prices.shift(1))
-
-    return returns.dropna()
+    """Daily log returns: log(P_t / P_(t-1))."""
+    return np.log(prices / prices.shift(1)).dropna()
 
 
 def correlation_matrix(returns: pd.DataFrame) -> pd.DataFrame:
-    "Pearson correlations between return series."
-
     return returns.corr(method="pearson")
 
 
 def generate_candidate_pairs(corr_matrix: pd.DataFrame, top_n: int = 10) -> List[Tuple[str, str]]:
-    "Take each asset's top correlations; deduplicate and orient alphabetically."
-
+    """Take each asset's top correlations; deduplicate and orient alphabetically."""
     pairs = set()
-
     for stock in corr_matrix.columns:
-
-        correlations = (
-            corr_matrix[stock].drop(labels=stock).sort_values(ascending=False).head(top_n)
-        )
-
+        correlations = corr_matrix[stock].drop(labels=stock).sort_values(ascending=False).head(top_n)
         for candidate in correlations.index:
-
-            pair = tuple(sorted((stock, candidate)))
-
-            pairs.add(pair)
-
-    return sorted(list(pairs))
+            pairs.add(tuple(sorted((stock, candidate))))
+    return sorted(pairs)

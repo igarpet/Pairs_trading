@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
@@ -19,14 +20,10 @@ class ConvergenceSignal:
 
 def fgn_autocovariance(lag, hurst, dt=1.0):
     k = np.asarray(lag, dtype=float)
-    return (
-        0.5
-        * (dt ** (2 * hurst))
-        * (
-            np.abs(k + 1) ** (2 * hurst)
-            - 2 * np.abs(k) ** (2 * hurst)
-            + np.abs(k - 1) ** (2 * hurst)
-        )
+    return 0.5 * dt ** (2 * hurst) * (
+        np.abs(k + 1) ** (2 * hurst)
+        - 2 * np.abs(k) ** (2 * hurst)
+        + np.abs(k - 1) ** (2 * hurst)
     )
 
 
@@ -110,9 +107,9 @@ def first_passage_days(paths, mu):
 
 def convergence_probability_curve(first_passage, horizon_days):
     fp = np.asarray(first_passage, dtype=float)
-    vals = [np.mean(np.isfinite(fp) & (fp <= d)) for d in range(1, horizon_days + 1)]
+    values = [np.mean(np.isfinite(fp) & (fp <= d)) for d in range(1, horizon_days + 1)]
     return pd.Series(
-        vals,
+        values,
         index=pd.RangeIndex(1, horizon_days + 1, name="dte"),
         name="convergence_probability",
     )
@@ -138,20 +135,18 @@ def structural_convergence_horizon(
     dt=1.0,
     seed=42,
 ):
-    if not (0 < hurst < 0.5):
-        raise ValueError("Structural eligibility requires 0 < H < 0.5.")
     x0 = mu + starting_z * np.sqrt(stationary_variance)
     paths = simulate_unconditional_fou_paths(
         x0, mu, kappa, sigma, hurst, max_horizon_days, n_paths, dt, seed
     )
     fp = first_passage_days(paths, mu)
     curve = convergence_probability_curve(fp, max_horizon_days)
-    t70, p = choose_dte_from_probability(curve, target_probability)
+    t70, probability = choose_dte_from_probability(curve, target_probability)
     return {
         "structural_starting_z": float(starting_z),
         "structural_target_probability": float(target_probability),
         "structural_t70": t70,
-        "structural_probability_at_t70": float(p),
+        "structural_probability_at_t70": float(probability),
         "structural_probability_max": float(curve.iloc[-1]),
     }
 
@@ -172,15 +167,19 @@ def calculate_convergence_signal(
     seed=42,
 ):
     history = pd.Series(spread_history).dropna().astype(float)
-    if len(history) < memory_window + 1:
-        raise ValueError(f"Need at least {memory_window+1} observations.")
     current = float(history.iloc[-1])
     current_z = float((current - mu) / np.sqrt(stationary_variance))
     direction = int(np.sign(current - mu))
+
     if direction == 0:
-        sig = ConvergenceSignal(current, current_z, 0, target_probability, None, 0.0, 1.0, False)
-        return sig, pd.Series(dtype=float)
-    innovations = infer_fgn_innovations(history.iloc[-(memory_window + 1) :], mu, kappa, sigma, dt)
+        signal = ConvergenceSignal(
+            current, current_z, 0, target_probability, None, 0.0, 1.0, False
+        )
+        return signal, pd.Series(dtype=float)
+
+    innovations = infer_fgn_innovations(
+        history.iloc[-(memory_window + 1) :], mu, kappa, sigma, dt
+    )
     paths = simulate_conditional_fou_paths(
         current,
         innovations,
@@ -195,16 +194,17 @@ def calculate_convergence_signal(
     )
     fp = first_passage_days(paths, mu)
     curve = convergence_probability_curve(fp, max_horizon_days)
-    dte, psel = choose_dte_from_probability(curve, target_probability)
+    dte, probability = choose_dte_from_probability(curve, target_probability)
     statistical_signal = abs(current_z) >= entry_z and dte is not None
-    sig = ConvergenceSignal(
+
+    signal = ConvergenceSignal(
         current,
         current_z,
         direction,
         target_probability,
         dte,
-        psel,
+        probability,
         float(curve.iloc[-1]),
         statistical_signal,
     )
-    return sig, curve
+    return signal, curve

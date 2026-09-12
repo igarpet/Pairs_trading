@@ -21,10 +21,15 @@ Run the notebooks from top to bottom:
 12. `11_static_convergence_calibration.ipynb`
 13. `12_alpha_validation.ipynb`
 
-The first notebook is now the single market-data entry point. It downloads the current
-S&P 500 constituent list, adjusted stock prices, `^GSPC` benchmark prices and `^IRX`
-Treasury yields, then saves `train_prices.parquet`, `test_prices.parquet`,
-`benchmark_prices.parquet` and `risk_free_rates.parquet` for the remaining modules.
+Module 01 is the single market-data entry point. It downloads the current S&P 500
+constituent list, adjusted stock prices, `^GSPC` benchmark prices and `^IRX` Treasury
+yields. It then creates the 70/30 chronological split directly in the notebook. Assets
+must have at most 5% missing observations in formation, a valid first formation price and
+complete out-of-sample prices. Formation gaps are forward-filled from earlier observations.
+The full-sample availability requirement is a documented selection limitation.
+
+Module 01 saves `train_prices.parquet`, `test_prices.parquet`, `benchmark_prices.parquet`,
+`risk_free_rates.parquet`, `availability.parquet` and `constituents.csv` for later modules.
 The constituent list is a current snapshot, so historical survivorship bias remains.
 
 Shared settings are in `src/research_config.py`. Generated files are written directly to
@@ -36,7 +41,6 @@ separate validation framework.
 The simplified `src/` folder contains the mathematics and reusable execution logic:
 
 - `research_config.py`: shared parameters.
-- `research_data.py`: formation/test preparation.
 - `cointegration.py`: return correlations, ADF/Engle-Granger screening and hedge ratios.
 - `fractional_OU.py`: fOU estimation and pair eligibility.
 - `convergence_signal.py`: fractional Gaussian simulation and first-passage probabilities.

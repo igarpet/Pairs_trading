@@ -11,9 +11,12 @@ Treasury yield. The current constituent snapshot introduces survivorship bias be
 not historical membership. Fresh downloads may also reflect vendor revisions.
 
 The first 70% of market sessions are formation and the remaining 30% are out of sample.
-Asset missingness and initial availability are assessed only in formation. Formation gaps
-are forward-filled from earlier observations; the out-of-sample panel is left unchanged.
-Prices are adjusted synthetic underlying levels, not historical listed-option spots.
+Formation eligibility requires no more than 5% missing formation observations and a valid
+first formation price. Formation gaps are forward-filled from earlier observations. Assets
+with any missing out-of-sample price are removed before downstream modeling so that the
+backtest panel is complete. This full-sample availability requirement is a selection/look-ahead
+limitation and does not recreate a point-in-time investable universe. Prices are adjusted
+synthetic underlying levels, not historical listed-option spots.
 
 ## Pair selection and fractional model
 

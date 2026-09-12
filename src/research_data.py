@@ -1,17 +1,12 @@
-"""Formation-only data preparation."""
-
 import pandas as pd
 
 
-def normalize_frame(frame):
-    frame = frame.copy()
-    frame.index = pd.to_datetime(frame.index).tz_localize(None).normalize()
-    frame.columns = frame.columns.astype(str)
-    return frame.sort_index()
+def prepare_prices(prices, config, membership=None):
+    p = prices.copy()
+    p.index = pd.to_datetime(p.index).tz_localize(None).normalize()
+    p.columns = p.columns.astype(str)
+    p = p.sort_index().sort_index(axis=1)
 
-
-def prepare_prices(prices, config, membership=None, allow_legacy=False):
-    p = normalize_frame(prices).sort_index(axis=1)
     cut = int(len(p) * config.train_fraction)
     formation_end = p.index[cut - 1]
 
@@ -29,8 +24,9 @@ def prepare_prices(prices, config, membership=None, allow_legacy=False):
 
     train = p.iloc[:cut].copy()
     selected = (train.isna().mean() <= config.max_missing_fraction) & train.iloc[0].notna()
-    retained = list(train.columns[selected])
-    report = pd.DataFrame(
+    retained = train.columns[selected]
+
+    availability = pd.DataFrame(
         {
             "ticker": train.columns,
             "formation_missing_fraction": train.isna().mean().values,
@@ -40,9 +36,4 @@ def prepare_prices(prices, config, membership=None, allow_legacy=False):
 
     train = train[retained].ffill()
     test = p.iloc[cut:][retained]
-    return train, test, report
-
-
-def read_series(path):
-    frame = normalize_frame(pd.read_parquet(path))
-    return frame.iloc[:, 0].astype(float)
+    return train, test, availability

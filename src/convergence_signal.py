@@ -1,78 +1,20 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from scipy.linalg import cho_factor, cho_solve
 
 
-@dataclass(frozen=True)
-class ConvergenceSignal:
-    current_spread: float
-    current_z: float
-    direction: int
-    target_probability: float
-    selected_dte_trading_days: int | None
-    probability_at_selected_dte: float
-    probability_at_max_horizon: float
-    statistical_signal: bool
-
-
-def fgn_autocovariance(lag, hurst, dt=1.0):
-    k = np.asarray(lag, dtype=float)
+def fgn_covariance(n, hurst, dt=1.0):
+    idx = np.arange(n)
+    lag = np.abs(idx[:, None] - idx[None, :]).astype(float)
     return 0.5 * dt ** (2 * hurst) * (
-        np.abs(k + 1) ** (2 * hurst)
-        - 2 * np.abs(k) ** (2 * hurst)
-        + np.abs(k - 1) ** (2 * hurst)
+        np.abs(lag + 1) ** (2 * hurst)
+        - 2 * lag ** (2 * hurst)
+        + np.abs(lag - 1) ** (2 * hurst)
     )
 
 
-def fgn_covariance_matrix(n, hurst, dt=1.0):
-    idx = np.arange(n)
-    return fgn_autocovariance(np.abs(idx[:, None] - idx[None, :]), hurst, dt)
-
-
-def simulate_unconditional_fou_paths(
-    current_spread, mu, kappa, sigma, hurst, horizon_days, n_paths=5000, dt=1.0, seed=42
-):
-    cov = fgn_covariance_matrix(horizon_days, hurst, dt)
-    rng = np.random.default_rng(seed)
-    noise = rng.multivariate_normal(np.zeros(horizon_days), cov, size=n_paths, method="cholesky")
-    paths = np.empty((n_paths, horizon_days + 1))
-    paths[:, 0] = current_spread
-    for t in range(horizon_days):
-        x = paths[:, t]
-        paths[:, t + 1] = x + kappa * (mu - x) * dt + sigma * noise[:, t]
-    return paths
-
-
-def infer_fgn_innovations(spread_history, mu, kappa, sigma, dt=1.0):
-    x = np.asarray(pd.Series(spread_history).dropna(), dtype=float)
-    dx = x[1:] - x[:-1]
-    drift = kappa * (mu - x[:-1]) * dt
-    return (dx - drift) / sigma
-
-
-def conditional_future_fgn(past_innovations, future_steps, hurst, dt=1.0, ridge=1e-10):
-    past = np.asarray(past_innovations, dtype=float)
-    m, n = len(past), int(future_steps)
-    full = fgn_covariance_matrix(m + n, hurst, dt)
-    cpp, cpf = full[:m, :m].copy(), full[:m, m:]
-    cfp, cff = full[m:, :m], full[m:, m:].copy()
-    cpp.flat[:: m + 1] += ridge
-    factor = cho_factor(cpp, lower=True, check_finite=False)
-    mean = cfp @ cho_solve(factor, past, check_finite=False)
-    cov = cff - cfp @ cho_solve(factor, cpf, check_finite=False)
-    cov = 0.5 * (cov + cov.T)
-    eig_min = np.min(np.linalg.eigvalsh(cov))
-    if eig_min < 0:
-        cov += (abs(eig_min) + ridge) * np.eye(n)
-    return mean, cov
-
-
-def simulate_conditional_fou_paths(
+def simulate_fou_paths(
     current_spread,
-    past_innovations,
     mu,
     kappa,
     sigma,
@@ -81,45 +23,65 @@ def simulate_conditional_fou_paths(
     n_paths=5000,
     dt=1.0,
     seed=42,
+    past_innovations=None,
 ):
-    mean, cov = conditional_future_fgn(past_innovations, horizon_days, hurst, dt)
+    if past_innovations is None:
+        mean = np.zeros(horizon_days)
+        cov = fgn_covariance(horizon_days, hurst, dt)
+    else:
+        past = np.asarray(past_innovations, dtype=float)
+        m = len(past)
+        full = fgn_covariance(m + horizon_days, hurst, dt)
+        cpp = full[:m, :m].copy()
+        cpf = full[:m, m:]
+        cfp = full[m:, :m]
+        cff = full[m:, m:].copy()
+
+        ridge = 1e-10
+        cpp.flat[:: m + 1] += ridge
+        factor = cho_factor(cpp, lower=True, check_finite=False)
+        mean = cfp @ cho_solve(factor, past, check_finite=False)
+        cov = cff - cfp @ cho_solve(factor, cpf, check_finite=False)
+        cov = 0.5 * (cov + cov.T)
+        eig_min = np.linalg.eigvalsh(cov).min()
+        if eig_min < 0:
+            cov += (abs(eig_min) + ridge) * np.eye(horizon_days)
+
     rng = np.random.default_rng(seed)
     noise = rng.multivariate_normal(mean, cov, size=n_paths, method="cholesky")
     paths = np.empty((n_paths, horizon_days + 1))
     paths[:, 0] = current_spread
+
     for t in range(horizon_days):
-        x = paths[:, t]
-        paths[:, t + 1] = x + kappa * (mu - x) * dt + sigma * noise[:, t]
+        paths[:, t + 1] = (
+            paths[:, t]
+            + kappa * (mu - paths[:, t]) * dt
+            + sigma * noise[:, t]
+        )
     return paths
 
 
-def first_passage_days(paths, mu):
-    paths = np.asarray(paths, dtype=float)
-    x0, future = paths[:, 0], paths[:, 1:]
-    side = np.sign(x0 - mu)
-    crossed = np.where(side[:, None] > 0, future <= mu, future >= mu)
+def convergence_probability(paths, mu, target_probability):
+    x0 = paths[:, 0]
+    future = paths[:, 1:]
+    crossed = np.where(
+        (x0 - mu)[:, None] > 0,
+        future <= mu,
+        future >= mu,
+    )
     any_cross = crossed.any(axis=1)
     first = np.argmax(crossed, axis=1) + 1
-    out = np.full(paths.shape[0], np.nan)
-    out[any_cross] = first[any_cross]
-    return out
+    first = np.where(any_cross, first, np.inf)
 
-
-def convergence_probability_curve(first_passage, horizon_days):
-    fp = np.asarray(first_passage, dtype=float)
-    values = [np.mean(np.isfinite(fp) & (fp <= d)) for d in range(1, horizon_days + 1)]
-    return pd.Series(
-        values,
-        index=pd.RangeIndex(1, horizon_days + 1, name="dte"),
+    curve = pd.Series(
+        [np.mean(first <= day) for day in range(1, future.shape[1] + 1)],
+        index=pd.RangeIndex(1, future.shape[1] + 1, name="dte"),
         name="convergence_probability",
     )
-
-
-def choose_dte_from_probability(probability_curve, target_probability=0.70):
-    reached = probability_curve[probability_curve >= target_probability]
-    if reached.empty:
-        return None, float(probability_curve.iloc[-1])
-    return int(reached.index[0]), float(reached.iloc[0])
+    reached = curve[curve >= target_probability]
+    horizon = int(reached.index[0]) if len(reached) else None
+    probability = float(reached.iloc[0]) if len(reached) else float(curve.iloc[-1])
+    return curve, horizon, probability
 
 
 def structural_convergence_horizon(
@@ -135,18 +97,16 @@ def structural_convergence_horizon(
     dt=1.0,
     seed=42,
 ):
-    x0 = mu + starting_z * np.sqrt(stationary_variance)
-    paths = simulate_unconditional_fou_paths(
-        x0, mu, kappa, sigma, hurst, max_horizon_days, n_paths, dt, seed
+    current = mu + starting_z * np.sqrt(stationary_variance)
+    paths = simulate_fou_paths(
+        current, mu, kappa, sigma, hurst, max_horizon_days, n_paths, dt, seed
     )
-    fp = first_passage_days(paths, mu)
-    curve = convergence_probability_curve(fp, max_horizon_days)
-    t70, probability = choose_dte_from_probability(curve, target_probability)
+    curve, horizon, probability = convergence_probability(paths, mu, target_probability)
     return {
         "structural_starting_z": float(starting_z),
         "structural_target_probability": float(target_probability),
-        "structural_t70": t70,
-        "structural_probability_at_t70": float(probability),
+        "structural_t70": horizon,
+        "structural_probability_at_t70": probability,
         "structural_probability_max": float(curve.iloc[-1]),
     }
 
@@ -172,17 +132,23 @@ def calculate_convergence_signal(
     direction = int(np.sign(current - mu))
 
     if direction == 0:
-        signal = ConvergenceSignal(
-            current, current_z, 0, target_probability, None, 0.0, 1.0, False
-        )
-        return signal, pd.Series(dtype=float)
+        return {
+            "current_spread": current,
+            "current_z": current_z,
+            "direction": 0,
+            "selected_dte_trading_days": None,
+            "probability_at_selected_dte": 0.0,
+            "probability_at_max_horizon": 1.0,
+            "statistical_signal": False,
+        }, pd.Series(dtype=float)
 
-    innovations = infer_fgn_innovations(
-        history.iloc[-(memory_window + 1) :], mu, kappa, sigma, dt
-    )
-    paths = simulate_conditional_fou_paths(
+    x = history.iloc[-(memory_window + 1) :].to_numpy()
+    dx = x[1:] - x[:-1]
+    drift = kappa * (mu - x[:-1]) * dt
+    innovations = (dx - drift) / sigma
+
+    paths = simulate_fou_paths(
         current,
-        innovations,
         mu,
         kappa,
         sigma,
@@ -191,20 +157,16 @@ def calculate_convergence_signal(
         n_paths,
         dt,
         seed,
+        past_innovations=innovations,
     )
-    fp = first_passage_days(paths, mu)
-    curve = convergence_probability_curve(fp, max_horizon_days)
-    dte, probability = choose_dte_from_probability(curve, target_probability)
-    statistical_signal = abs(current_z) >= entry_z and dte is not None
+    curve, horizon, probability = convergence_probability(paths, mu, target_probability)
 
-    signal = ConvergenceSignal(
-        current,
-        current_z,
-        direction,
-        target_probability,
-        dte,
-        probability,
-        float(curve.iloc[-1]),
-        statistical_signal,
-    )
-    return signal, curve
+    return {
+        "current_spread": current,
+        "current_z": current_z,
+        "direction": direction,
+        "selected_dte_trading_days": horizon,
+        "probability_at_selected_dte": probability,
+        "probability_at_max_horizon": float(curve.iloc[-1]),
+        "statistical_signal": abs(current_z) >= entry_z and horizon is not None,
+    }, curve

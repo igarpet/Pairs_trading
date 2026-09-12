@@ -1,75 +1,69 @@
-"""Next-close execution of lagged signals, with exact forecast horizons."""
-
 from math import sqrt
+
 import numpy as np
 import pandas as pd
-from src.market_math import (
-    black_scholes_price,
-    black_scholes_delta,
-    _prepare_pair_parameters,
-    compute_log_spread,
-    precompute_oos_ewma_volatility,
-    _risk_free_at,
-    _has_converged,
-    _stable_seed,
-    option_types_from_spread_direction,
-    CONTRACT_MULTIPLIER,
-)
+
 from src.convergence_signal import calculate_convergence_signal
+from src.market_math import (
+    CONTRACT_MULTIPLIER,
+    black_scholes,
+    compute_log_spread,
+    ewma_volatility,
+    option_types_from_spread_direction,
+    prepare_pair_parameters,
+    risk_free_at,
+    stable_seed,
+)
 
 
-def budgeted_size(beta, spots, deltas, prices, budget, max_error, slippage_bps, commission):
-    """Maximize invested premium with an integer hedge under the error cap."""
-    costs = CONTRACT_MULTIPLIER * np.asarray(prices) * (1 + slippage_bps / 10000) + commission
+def budgeted_size(beta, spots, deltas, option_prices, budget, max_error, slippage_bps, commission):
+    costs = CONTRACT_MULTIPLIER * np.asarray(option_prices) * (1 + slippage_bps / 10000) + commission
     exposure = np.abs(deltas) * np.asarray(spots)
     ratio = beta * exposure[0] / exposure[1]
     best = None
 
-    for nd in range(1, max(0, int(np.floor((budget - costs[1]) / costs[0]))) + 1):
-        low = max(1, int(np.ceil((1 - max_error) * ratio * nd - 1e-12)))
+    for dependent_contracts in range(
+        1, max(0, int(np.floor((budget - costs[1]) / costs[0]))) + 1
+    ):
+        low = max(1, int(np.ceil((1 - max_error) * ratio * dependent_contracts - 1e-12)))
         high = min(
-            int(np.floor((1 + max_error) * ratio * nd + 1e-12)),
-            int(np.floor((budget - costs[0] * nd) / costs[1] + 1e-12)),
+            int(np.floor((1 + max_error) * ratio * dependent_contracts + 1e-12)),
+            int(np.floor((budget - costs[0] * dependent_contracts) / costs[1] + 1e-12)),
         )
         if high < low:
             continue
 
-        error = abs(high / (nd * ratio) - 1)
-        debit = nd * costs[0] + high * costs[1]
-        rank = (debit, -error, -(nd + high))
+        error = abs(high / (dependent_contracts * ratio) - 1)
+        debit = dependent_contracts * costs[0] + high * costs[1]
+        rank = (debit, -error, -(dependent_contracts + high))
         if best is None or rank > best[0]:
-            best = (rank, nd, high, error)
+            best = (rank, dependent_contracts, high, error)
 
     if best is None:
         return None
 
-    _, nd, ni, error = best
-    return dict(
-        dependent_contracts=nd,
-        independent_contracts=ni,
-        relative_hedge_error=float(error),
-        target_contract_ratio_ind_over_dep=float(ratio),
-        realized_contract_ratio_ind_over_dep=ni / nd,
-    )
+    _, dependent_contracts, independent_contracts, error = best
+    return {
+        "dependent_contracts": dependent_contracts,
+        "independent_contracts": independent_contracts,
+        "relative_hedge_error": float(error),
+        "target_contract_ratio_ind_over_dep": float(ratio),
+        "realized_contract_ratio_ind_over_dep": independent_contracts / dependent_contracts,
+    }
 
 
 def entry_option_terms(instruction, date, prices, volatility, risk_free_rates):
-    """Shared synthetic ATM terms for Module 06 and the execution engine."""
     date = pd.Timestamp(date)
     T = (pd.Timestamp(instruction["expiry_date"]) - date).days / 365
-    spots = [float(prices.at[date, instruction[leg]]) for leg in ("dependent", "independent")]
-    vols = [float(volatility.at[date, instruction[leg]]) for leg in ("dependent", "independent")]
-    rf = _risk_free_at(risk_free_rates, date)
+    legs = ("dependent", "independent")
+    spots = [float(prices.at[date, instruction[leg]]) for leg in legs]
+    vols = [float(volatility.at[date, instruction[leg]]) for leg in legs]
+    rf = risk_free_at(risk_free_rates, date)
     types = option_types_from_spread_direction(instruction["direction"])
-    option_prices = [
-        black_scholes_price(spot, spot, T, rf, vol, option_type)
-        for spot, vol, option_type in zip(spots, vols, types)
-    ]
-    deltas = [
-        black_scholes_delta(spot, spot, T, rf, vol, option_type)
-        for spot, vol, option_type in zip(spots, vols, types)
-    ]
-    return spots, vols, rf, types, option_prices, deltas
+    terms = [black_scholes(s, s, T, rf, v, typ) for s, v, typ in zip(spots, vols, types)]
+    option_prices = [term[0] for term in terms]
+    deltas = [term[1] for term in terms]
+    return spots, types, option_prices, deltas
 
 
 def run_backtest(
@@ -81,23 +75,17 @@ def run_backtest(
     config,
     signal_cache=None,
 ):
-    """Process each close in order: exits, pending entries, new signals, then equity."""
-    train, test = train_prices.copy(), test_prices.copy()
-    for frame in (train, test):
-        frame.index = pd.to_datetime(frame.index).tz_localize(None).normalize()
+    train = train_prices.copy()
+    test = test_prices.copy()
+    train.index = pd.to_datetime(train.index).tz_localize(None).normalize()
+    test.index = pd.to_datetime(test.index).tz_localize(None).normalize()
 
-    params = (
-        _prepare_pair_parameters(eligible_pairs, cointegrated_pairs)
-        .sort_values("pair")
-        .reset_index(drop=True)
-    )
+    params = prepare_pair_parameters(eligible_pairs, cointegrated_pairs).sort_values("pair")
     full = pd.concat([train, test])
     dates = full.index
-    vol = precompute_oos_ewma_volatility(train, test, config.ewma_lambda)
+    volatility = ewma_volatility(train, test, config.ewma_lambda)
     spreads = {
-        row.pair: compute_log_spread(
-            full, row.dependent, row.independent, row.alpha, row.beta
-        )
+        row.pair: compute_log_spread(full, row.dependent, row.independent, row.alpha, row.beta)
         for row in params.itertuples()
     }
 
@@ -105,45 +93,45 @@ def run_backtest(
     opened = {}
     pending = {}
     trades = []
-    skipped = []
     forecasts = []
     equity = []
     slip = config.slippage_bps / 10000
 
     def quote(position, date):
         T = max((position["expiry_date"] - date).days, 0) / 365
-        rf = _risk_free_at(risk_free_rates, date)
+        rf = risk_free_at(risk_free_rates, date)
         option_prices = [
-            black_scholes_price(
+            black_scholes(
                 test.at[date, position[leg]],
                 position[leg + "_strike"],
                 T,
                 rf,
-                vol.at[date, position[leg]],
+                volatility.at[date, position[leg]],
                 position[leg + "_option_type"],
-            )
+            )[0]
             for leg in ("dependent", "independent")
         ]
-        gross = CONTRACT_MULTIPLIER * sum(
+        return float(CONTRACT_MULTIPLIER * sum(
             position[leg + "_contracts"] * price
             for leg, price in zip(("dependent", "independent"), option_prices)
-        )
-        return float(gross), option_prices
+        ))
 
     for date in test.index:
         i = dates.get_loc(date)
 
-        # 1. Settle expiry or execute an exit signalled at the previous close.
         for pair in list(opened):
             position = opened[pair]
             expired = date >= position["expiry_date"]
             last = date == test.index[-1]
-            lagged_cross = _has_converged(
-                spreads[pair].iloc[i - 1], position["mu"], position["direction"]
+            previous_spread = spreads[pair].iloc[i - 1]
+            converged = (
+                previous_spread <= position["mu"]
+                if position["direction"] > 0
+                else previous_spread >= position["mu"]
             )
 
-            if expired or last or (date > position["entry_date"] and lagged_cross):
-                gross, option_prices = quote(position, date)
+            if expired or last or (date > position["entry_date"] and converged):
+                gross = quote(position, date)
                 fees = config.commission_per_contract * (
                     position["dependent_contracts"] + position["independent_contracts"]
                 )
@@ -157,46 +145,26 @@ def run_backtest(
                         "exit_reason": "expiry" if expired else "end_of_test" if last else "convergence",
                         "exit_spread": float(spreads[pair].loc[date]),
                         "exit_value": value,
-                        "exit_model_value": gross,
                         "exit_cost": exit_cost,
-                        "exit_dependent_option_price": option_prices[0],
-                        "exit_independent_option_price": option_prices[1],
                         "pnl": value - position["entry_premium"],
                         "trade_return": value / position["entry_premium"] - 1,
-                        "holding_trading_days": int(i - dates.get_loc(position["entry_date"])),
-                        "holding_calendar_days": int((date - position["entry_date"]).days),
                     }
                 )
                 del opened[pair]
 
-        # 2. Mark equity before entries; each debit is cash-limited and budgeted.
-        nav = cash + sum(quote(position, date)[0] for position in opened.values())
+        nav = cash + sum(quote(position, date) for position in opened.values())
         for pair in sorted(pending):
             instruction = pending[pair]
-            reason = None
             if pair in opened:
-                reason = "already_open"
-            elif config.max_open_pairs is not None and len(opened) >= config.max_open_pairs:
-                reason = "max_open_pairs"
-            elif date >= instruction["expiry_date"]:
-                reason = "no_remaining_maturity"
-            elif date == test.index[-1]:
-                reason = "last_session"
-
-            if reason:
-                skipped.append(
-                    dict(
-                        date=date,
-                        pair=pair,
-                        reason=reason,
-                        signal_date=instruction["signal_date"],
-                    )
-                )
+                continue
+            if config.max_open_pairs is not None and len(opened) >= config.max_open_pairs:
+                continue
+            if date >= instruction["expiry_date"] or date == test.index[-1]:
                 continue
 
             position = instruction.copy()
-            spots, vols, rf, types, option_prices, deltas = entry_option_terms(
-                position, date, test, vol, risk_free_rates
+            spots, types, option_prices, deltas = entry_option_terms(
+                position, date, test, volatility, risk_free_rates
             )
             budget = max(0.0, min(cash, nav * config.premium_budget_fraction))
             sizing = budgeted_size(
@@ -209,17 +177,7 @@ def run_backtest(
                 config.slippage_bps,
                 config.commission_per_contract,
             )
-
             if sizing is None:
-                skipped.append(
-                    dict(
-                        date=date,
-                        pair=pair,
-                        signal_date=position["signal_date"],
-                        reason="no_feasible_integer_hedge",
-                        budget=budget,
-                    )
-                )
                 continue
 
             position.update(sizing)
@@ -235,14 +193,8 @@ def run_backtest(
                 entry_date=date,
                 entry_spread=float(spreads[pair].loc[date]),
                 entry_premium=debit,
-                entry_model_value=gross,
                 entry_cost=entry_cost,
                 entry_budget=budget,
-                entry_risk_free_rate=rf,
-                option_calendar_dte=int((position["expiry_date"] - date).days),
-                execution_convention="next_close",
-                option_model="European_BS_synthetic_q0",
-                contract_multiplier=100,
             )
 
             for j, leg in enumerate(("dependent", "independent")):
@@ -250,10 +202,6 @@ def run_backtest(
                     {
                         leg + "_strike": spots[j],
                         leg + "_option_type": types[j],
-                        "entry_" + leg + "_spot": spots[j],
-                        "entry_" + leg + "_volatility": vols[j],
-                        "entry_" + leg + "_option_price": option_prices[j],
-                        "entry_" + leg + "_delta": deltas[j],
                     }
                 )
 
@@ -262,7 +210,6 @@ def run_backtest(
 
         pending = {}
 
-        # 3. Forecast from information through today; queue orders for tomorrow.
         if date != test.index[-1]:
             for row in params.itertuples():
                 if row.pair in opened:
@@ -273,25 +220,8 @@ def run_backtest(
                 if abs(z) < config.entry_z or len(history) < config.memory_window + 1:
                     continue
 
-                signal_seed = _stable_seed(config.seed, row.pair, date)
-                key = (
-                    row.pair,
-                    str(date),
-                    row.mu,
-                    row.kappa,
-                    row.sigma,
-                    row.hurst,
-                    row.variance,
-                    config.target_probability,
-                    config.entry_z,
-                    config.memory_window,
-                    config.max_horizon_days,
-                    config.n_paths,
-                    signal_seed,
-                    history.iloc[-(config.memory_window + 1) :].to_numpy().tobytes(),
-                )
+                key = (row.pair, pd.Timestamp(date))
                 signal = signal_cache.get(key) if signal_cache is not None else None
-
                 if signal is None:
                     signal, _ = calculate_convergence_signal(
                         history,
@@ -300,65 +230,60 @@ def run_backtest(
                         row.sigma,
                         row.hurst,
                         row.variance,
-                        target_probability=config.target_probability,
-                        entry_z=config.entry_z,
-                        memory_window=config.memory_window,
-                        max_horizon_days=config.max_horizon_days,
-                        n_paths=config.n_paths,
-                        seed=signal_seed,
+                        config.target_probability,
+                        config.entry_z,
+                        config.memory_window,
+                        config.max_horizon_days,
+                        config.n_paths,
+                        seed=stable_seed(config.seed, row.pair, date),
                     )
                     if signal_cache is not None:
                         signal_cache[key] = signal
 
-                horizon = signal.selected_dte_trading_days
+                horizon = signal["selected_dte_trading_days"]
                 if horizon is None:
                     continue
 
-                record = dict(
-                    pair=row.pair,
-                    dependent=row.dependent,
-                    independent=row.independent,
-                    alpha=row.alpha,
-                    beta=row.beta,
-                    mu=row.mu,
-                    signal_date=date,
-                    signal_spread=float(history.iloc[-1]),
-                    entry_z=float(z),
-                    direction=int(signal.direction),
-                    convergence_horizon_trading_days=int(horizon),
-                    target_probability=config.target_probability,
-                    probability_at_selected_horizon=float(signal.probability_at_selected_dte),
-                    probability_at_max_horizon=float(signal.probability_at_max_horizon),
-                    signal_seed=signal_seed,
-                )
-                record["forecast_id"] = f"{row.pair}|{date.date()}"
+                record = {
+                    "pair": row.pair,
+                    "dependent": row.dependent,
+                    "independent": row.independent,
+                    "alpha": row.alpha,
+                    "beta": row.beta,
+                    "mu": row.mu,
+                    "signal_date": date,
+                    "signal_spread": float(history.iloc[-1]),
+                    "entry_z": float(z),
+                    "direction": int(signal["direction"]),
+                    "convergence_horizon_trading_days": int(horizon),
+                    "target_probability": config.target_probability,
+                    "probability_at_selected_horizon": float(signal["probability_at_selected_dte"]),
+                    "probability_at_max_horizon": float(signal["probability_at_max_horizon"]),
+                    "signal_seed": stable_seed(config.seed, row.pair, date),
+                    "forecast_id": f"{row.pair}|{date.date()}",
+                }
                 forecasts.append(record.copy())
 
-                if i + horizon >= len(dates):
-                    skipped.append(dict(date=date, pair=row.pair, reason="horizon_beyond_test"))
+                if horizon <= 1 or i + horizon >= len(dates):
                     continue
 
                 record["expiry_date"] = dates[i + horizon]
                 record["forecast_horizon_date"] = dates[i + horizon]
-                if horizon <= 1:
-                    skipped.append(dict(date=date, pair=row.pair, reason="no_remaining_maturity"))
-                    continue
-
                 pending[row.pair] = record
 
-        # 4. Record cash plus marked open options after all transactions.
-        mark = sum(quote(position, date)[0] for position in opened.values())
+        mark = sum(quote(position, date) for position in opened.values())
         equity.append(
-            dict(
-                date=date,
-                cash=cash,
-                open_position_value=mark,
-                equity=cash + mark,
-                n_open_positions=len(opened),
-            )
+            {
+                "date": date,
+                "cash": cash,
+                "open_position_value": mark,
+                "equity": cash + mark,
+                "n_open_positions": len(opened),
+            }
         )
 
     trade_columns = [
+        "forecast_id",
         "pair",
         "entry_date",
         "exit_date",
@@ -367,11 +292,10 @@ def run_backtest(
         "trade_return",
         "entry_premium",
     ]
-    return dict(
-        trades=pd.DataFrame(trades) if trades else pd.DataFrame(columns=trade_columns),
-        equity_curve=pd.DataFrame(equity).set_index("date"),
-        skipped_signals=pd.DataFrame(skipped),
-        pair_parameters=params,
-        oos_ewma_volatility=vol,
-        forecasts=pd.DataFrame(forecasts),
-    )
+    return {
+        "trades": pd.DataFrame(trades) if trades else pd.DataFrame(columns=trade_columns),
+        "equity_curve": pd.DataFrame(equity).set_index("date"),
+        "pair_parameters": params.reset_index(drop=True),
+        "oos_ewma_volatility": volatility,
+        "forecasts": pd.DataFrame(forecasts),
+    }

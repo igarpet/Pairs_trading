@@ -1,5 +1,6 @@
 """Input validation and formation-only cleaning."""
 
+import json
 import numpy as np
 import pandas as pd
 
@@ -21,7 +22,7 @@ def prepare_prices(prices, config, membership=None, allow_legacy=False):
     formation_end = p.index[cut - 1]
     if membership is None and not allow_legacy:
         raise ValueError(
-            "Supply --membership or explicitly acknowledge --allow-legacy-universe."
+            "Supply membership data or set allow_legacy=True for the supplied filtered universe."
         )
     if membership is not None:
         required = {"ticker", "member_from", "member_to", "known_at"}
@@ -43,9 +44,7 @@ def prepare_prices(prices, config, membership=None, allow_legacy=False):
             raise ValueError(f"Price input missing dated members: {sorted(missing)}")
         p = p.loc[:, sorted(set(keep))]
     train = p.iloc[:cut].copy()
-    selected = (train.isna().mean() <= config.max_missing_fraction) & train.iloc[
-        0
-    ].notna()
+    selected = (train.isna().mean() <= config.max_missing_fraction) & train.iloc[0].notna()
     retained = list(train.columns[selected])
     report = pd.DataFrame(
         {
@@ -54,17 +53,39 @@ def prepare_prices(prices, config, membership=None, allow_legacy=False):
             "retained": selected.values,
         }
     )
-    train = train[
-        retained
-    ].ffill()  # prior-only fill on formation; no backfill, no OOS filling
+    train = train[retained].ffill()  # prior-only fill on formation; no backfill, no OOS filling
     test = p.iloc[cut:][retained]
     if len(retained) < 2:
-        raise ValueError(
-            "Fewer than two assets pass formation-only availability rules."
-        )
+        raise ValueError("Fewer than two assets pass formation-only availability rules.")
     for frame in [train, test]:
         if not np.isfinite(frame.to_numpy()).all() or (frame <= 0).any().any():
             raise ValueError(
                 "Invalid retained prices. OOS missing observations require a delisting/missing-data policy; do not drop assets using future availability."
             )
     return train, test, report
+
+
+def write_json(filename, value):
+    def clean(x):
+        if isinstance(x, dict):
+            return {str(k): clean(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [clean(v) for v in x]
+        if isinstance(x, (float, np.floating)) and not np.isfinite(x):
+            return None
+        if isinstance(x, np.generic):
+            return x.item()
+        return x
+
+    with open(filename, "w", encoding="utf-8") as file:
+        json.dump(clean(value), file, indent=2, default=str, allow_nan=False)
+
+
+def read_series(path):
+    x = normalize_frame(pd.read_parquet(path))
+    if x.shape[1] != 1:
+        raise ValueError(f"{path} must contain exactly one data column.")
+    s = x.iloc[:, 0].astype(float)
+    if not np.isfinite(s).all():
+        raise ValueError(f"{path} contains nonfinite values.")
+    return s

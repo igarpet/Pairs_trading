@@ -33,9 +33,7 @@ def market_regression(aligned, lags=5):
     if len(aligned) <= max(3, lags) or aligned.market_excess.std() < 1e-12:
         return {"status": "insufficient_market_variation", "n_obs": len(aligned)}
     x = sm.add_constant(aligned.market_excess, has_constant="add")
-    fit = sm.OLS(aligned.strategy_excess, x).fit(
-        cov_type="HAC", cov_kwds={"maxlags": lags}
-    )
+    fit = sm.OLS(aligned.strategy_excess, x).fit(cov_type="HAC", cov_kwds={"maxlags": lags})
     p = float(fit.pvalues["const"])
     t = float(fit.tvalues["const"])
     # Degenerate all-zero/exact-fit response has no meaningful asymptotic test.
@@ -92,30 +90,21 @@ def bootstrap_mean(returns, blocks=(10, 20, 40), replications=10000, seed=42):
 
 
 def placebo_samples(pool, n_pairs, n_portfolios, seed):
-    """IID uniform subsets. Repeated subsets across draws are allowed and recorded.
-
-    Avoids the old infinite loop when fewer than 100 unique subsets exist.
-    """
+    """Uniform subsets without replacement within a draw; repeated draws are allowed."""
     ordered = pool.sort_values("pair").reset_index(drop=True)
     if n_pairs <= 0 or n_pairs > len(ordered):
         raise ValueError("Invalid placebo portfolio size.")
     for j in range(n_portfolios):
         rng = np.random.default_rng(np.random.SeedSequence([seed, j]))
-        yield j, ordered.iloc[
-            rng.choice(len(ordered), n_pairs, replace=False)
-        ].sort_values("pair").reset_index(drop=True)
+        yield j, ordered.iloc[rng.choice(len(ordered), n_pairs, replace=False)].sort_values(
+            "pair"
+        ).reset_index(drop=True)
 
 
 def portfolio_metrics(result, initial_capital):
-    from src.backtest import backtest_summary
-
-    m = backtest_summary(
-        result["trades"], result["equity_curve"], initial_capital
-    ).to_dict()
+    m = backtest_summary(result["trades"], result["equity_curve"], initial_capital).to_dict()
     ret = result["equity_curve"].equity.pct_change(fill_method=None).dropna()
-    m["daily_sharpe"] = (
-        float(np.sqrt(252) * ret.mean() / ret.std()) if ret.std() > 0 else None
-    )
+    m["daily_sharpe"] = float(np.sqrt(252) * ret.mean() / ret.std()) if ret.std() > 0 else None
     return m
 
 
@@ -129,15 +118,8 @@ def compare_placebos(actual, placebos):
             else pd.Series(dtype=float)
         )
         finite = values[np.isfinite(values)]
-        if (
-            a is None
-            or not np.isfinite(a)
-            or len(finite) != len(placebos)
-            or len(finite) == 0
-        ):
-            rows.append(
-                dict(metric=key, status="undefined_or_incomplete", n_draws=len(values))
-            )
+        if a is None or not np.isfinite(a) or len(finite) != len(placebos) or len(finite) == 0:
+            rows.append(dict(metric=key, status="undefined_or_incomplete", n_draws=len(values)))
             continue
         rows.append(
             dict(
@@ -150,3 +132,41 @@ def compare_placebos(actual, placebos):
             )
         )
     return pd.DataFrame(rows)
+
+
+def backtest_summary(
+    trades: pd.DataFrame,
+    equity_curve: pd.DataFrame,
+    initial_capital: float,
+) -> pd.Series:
+    """Compact Module 07 sanity-check summary; full performance analysis belongs in Module 08."""
+    if equity_curve.empty:
+        raise ValueError("equity_curve is empty.")
+
+    eq = equity_curve["equity"].astype(float)
+    running_max = eq.cummax().clip(lower=initial_capital)
+    drawdown = eq / running_max - 1.0
+
+    if trades.empty:
+        wins = np.nan
+        avg_trade_return = np.nan
+        median_trade_return = np.nan
+    else:
+        wins = float((trades["pnl"] > 0).mean())
+        avg_trade_return = float(trades["trade_return"].mean())
+        median_trade_return = float(trades["trade_return"].median())
+
+    return pd.Series(
+        {
+            "initial_capital": float(initial_capital),
+            "final_equity": float(eq.iloc[-1]),
+            "total_return": float(eq.iloc[-1] / initial_capital - 1.0),
+            "max_drawdown": float(drawdown.min()),
+            "n_trades": int(len(trades)),
+            "win_rate": wins,
+            "average_trade_return": avg_trade_return,
+            "median_trade_return": median_trade_return,
+            "max_concurrent_positions": int(equity_curve["n_open_positions"].max()),
+        },
+        name="module_07_summary",
+    )

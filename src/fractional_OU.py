@@ -3,6 +3,7 @@ from dataclasses import dataclass, asdict
 import numpy as np
 import pandas as pd
 from scipy.special import gamma
+from src.convergence_signal import structural_convergence_horizon
 
 
 @dataclass(frozen=True)
@@ -68,22 +69,12 @@ def estimate_kappa_stationary_variance(series, hurst, sigma):
 def estimate_fractional_ou(spread, dt=1.0, min_h=0.01, max_h=0.99):
     x = pd.Series(spread).dropna().astype(float)
     if len(x) < 100:
-        raise ValueError(
-            "At least 100 observations are recommended for fOU estimation."
-        )
+        raise ValueError("At least 100 observations are recommended for fOU estimation.")
     mu = float(x.mean())
     hurst = estimate_hurst_cof(x, min_h=min_h, max_h=max_h)
     sigma = estimate_sigma_second_variation(x, hurst=hurst, dt=dt)
     kappa, variance = estimate_kappa_stationary_variance(x, hurst=hurst, sigma=sigma)
-    return FOUParameters(
-        mu, kappa, sigma, hurst, variance, float(np.log(2) / kappa), len(x)
-    )
-
-
-def standardized_spread(spread, mu, variance):
-    if variance <= 0:
-        raise ValueError("variance must be positive.")
-    return ((pd.Series(spread).astype(float) - mu) / np.sqrt(variance)).rename("fou_z")
+    return FOUParameters(mu, kappa, sigma, hurst, variance, float(np.log(2) / kappa), len(x))
 
 
 def fit_cointegrated_pairs_fractional_ou(
@@ -101,9 +92,7 @@ def fit_cointegrated_pairs_fractional_ou(
         pair = row[pair_col] if pair_col in row.index else f"{dep}-{indep}"
         key = (dep, indep)
         if key not in spreads:
-            audit.append(
-                {"pair": pair, "status": "missing_spread", "error": "Spread key absent"}
-            )
+            audit.append({"pair": pair, "status": "missing_spread", "error": "Spread key absent"})
             continue
         try:
             params = estimate_fractional_ou(spreads[key], dt=dt)
@@ -115,14 +104,72 @@ def fit_cointegrated_pairs_fractional_ou(
                 "pair": pair,
                 "status": "fitted",
                 "error": "",
-                "hurst_at_clip_boundary": bool(
-                    params.hurst <= 0.01 or params.hurst >= 0.99
-                ),
+                "hurst_at_clip_boundary": bool(params.hurst <= 0.01 or params.hurst >= 0.99),
                 "daily_euler_stable": bool(0 < params.kappa < 2),
             }
         )
-        rows.append(
-            {"pair": pair, "dependent": dep, "independent": indep, **params.to_dict()}
-        )
+        rows.append({"pair": pair, "dependent": dep, "independent": indep, **params.to_dict()})
     result = pd.DataFrame(rows).reset_index(drop=True)
     return (result, pd.DataFrame(audit)) if return_audit else result
+
+
+def filter_antipersistent_pairs(fou_parameters):
+    cols = ["hurst", "kappa", "sigma", "variance", "drift_half_life"]
+    mask = (
+        (fou_parameters["hurst"] > 0)
+        & (fou_parameters["hurst"] < 0.5)
+        & (fou_parameters["kappa"] > 0)
+        & (fou_parameters["kappa"] < 2)
+        & (fou_parameters["sigma"] > 0)
+        & (fou_parameters["variance"] > 0)
+        & np.isfinite(fou_parameters[cols]).all(axis=1)
+    )
+    return fou_parameters.loc[mask].copy().reset_index(drop=True)
+
+
+def compute_structural_t70(
+    eligible_pairs,
+    starting_z=1.5,
+    target_probability=0.70,
+    max_horizon_days=252,
+    n_paths=5000,
+    dt=1.0,
+    seed=42,
+):
+    rows = []
+    for _, row in eligible_pairs.iterrows():
+        try:
+            result = structural_convergence_horizon(
+                mu=row["mu"],
+                kappa=row["kappa"],
+                sigma=row["sigma"],
+                hurst=row["hurst"],
+                stationary_variance=row["variance"],
+                starting_z=starting_z,
+                target_probability=target_probability,
+                max_horizon_days=max_horizon_days,
+                n_paths=n_paths,
+                dt=dt,
+                seed=seed,
+            )
+            rows.append({**row.to_dict(), **result})
+        except Exception as exc:
+            rows.append(
+                {
+                    **row.to_dict(),
+                    "structural_t70": np.nan,
+                    "structural_probability_max": np.nan,
+                    "eligibility_error": str(exc),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def select_top_pairs_by_structural_t70(structural_results, top_n=40):
+    valid = structural_results[structural_results["structural_t70"].notna()].copy()
+    valid = valid.sort_values(
+        ["structural_t70", "structural_probability_max", "pair"],
+        ascending=[True, False, True],
+        kind="stable",
+    )
+    return valid.head(top_n).reset_index(drop=True)

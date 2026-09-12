@@ -1,6 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
-from typing import Optional
+from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from scipy.linalg import cho_factor, cho_solve
@@ -12,13 +11,10 @@ class ConvergenceSignal:
     current_z: float
     direction: int
     target_probability: float
-    selected_dte_trading_days: Optional[int]
+    selected_dte_trading_days: int | None
     probability_at_selected_dte: float
     probability_at_max_horizon: float
     statistical_signal: bool
-
-    def to_dict(self):
-        return asdict(self)
 
 
 def fgn_autocovariance(lag, hurst, dt=1.0):
@@ -44,9 +40,7 @@ def simulate_unconditional_fou_paths(
 ):
     cov = fgn_covariance_matrix(horizon_days, hurst, dt)
     rng = np.random.default_rng(seed)
-    noise = rng.multivariate_normal(
-        np.zeros(horizon_days), cov, size=n_paths, method="cholesky"
-    )
+    noise = rng.multivariate_normal(np.zeros(horizon_days), cov, size=n_paths, method="cholesky")
     paths = np.empty((n_paths, horizon_days + 1))
     paths[:, 0] = current_spread
     for t in range(horizon_days):
@@ -184,13 +178,9 @@ def calculate_convergence_signal(
     current_z = float((current - mu) / np.sqrt(stationary_variance))
     direction = int(np.sign(current - mu))
     if direction == 0:
-        sig = ConvergenceSignal(
-            current, current_z, 0, target_probability, None, 0.0, 1.0, False
-        )
+        sig = ConvergenceSignal(current, current_z, 0, target_probability, None, 0.0, 1.0, False)
         return sig, pd.Series(dtype=float)
-    innovations = infer_fgn_innovations(
-        history.iloc[-(memory_window + 1) :], mu, kappa, sigma, dt
-    )
+    innovations = infer_fgn_innovations(history.iloc[-(memory_window + 1) :], mu, kappa, sigma, dt)
     paths = simulate_conditional_fou_paths(
         current,
         innovations,
@@ -218,9 +208,3 @@ def calculate_convergence_signal(
         statistical_signal,
     )
     return sig, curve
-
-
-def trading_days_to_calendar_days(
-    trading_days, trading_days_per_year=252, calendar_days_per_year=365
-):
-    return int(np.ceil(trading_days * calendar_days_per_year / trading_days_per_year))

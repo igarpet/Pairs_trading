@@ -37,12 +37,8 @@ def label_forecasts(forecasts, prices):
                 "selected_horizon_assessable": bool(success or complete),
                 "complete_horizon_observed": complete,
                 "observed_path_steps": prefix,
-                "first_crossing_date": (
-                    hit.index[np.flatnonzero(hit)[0]] if success else pd.NaT
-                ),
-                "forecast_horizon_date": (
-                    prices.index[i + h] if i + h < len(prices) else pd.NaT
-                ),
+                "first_crossing_date": (hit.index[np.flatnonzero(hit)[0]] if success else pd.NaT),
+                "forecast_horizon_date": (prices.index[i + h] if i + h < len(prices) else pd.NaT),
                 "realized_within_selected_horizon": y,
                 "brier_component": (y - p) ** 2,
                 "calibration_error": y - p,
@@ -61,11 +57,7 @@ def summarize_forecasts(labels):
         n_forecasts=len(labels),
         n_complete_horizon=len(full),
         n_censored=int(labels.event_status.eq("censored").sum()),
-        mean_prediction=(
-            float(full.probability_at_selected_horizon.mean()) if len(full) else None
-        ),
-        observed_rate=(
-            float(full.realized_within_selected_horizon.mean()) if len(full) else None
-        ),
+        mean_prediction=(float(full.probability_at_selected_horizon.mean()) if len(full) else None),
+        observed_rate=(float(full.realized_within_selected_horizon.mean()) if len(full) else None),
         brier_score=float(full.brier_component.mean()) if len(full) else None,
     )

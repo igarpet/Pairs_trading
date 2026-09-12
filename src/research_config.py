@@ -61,11 +61,7 @@ class ResearchConfig:
             or self.commission_per_contract < 0
         ):
             raise ValueError("Invalid hedge tolerance or transaction costs.")
-        if (
-            not 0 < self.ewma_lambda < 1
-            or not 0 < self.target_probability < 1
-            or self.entry_z <= 0
-        ):
+        if not 0 < self.ewma_lambda < 1 or not 0 < self.target_probability < 1 or self.entry_z <= 0:
             raise ValueError("Invalid model thresholds.")
         if any(not isinstance(b, int) or b < 1 for b in self.bootstrap_blocks):
             raise ValueError("Bootstrap block lengths must be positive integers.")

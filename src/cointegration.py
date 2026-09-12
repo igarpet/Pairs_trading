@@ -18,9 +18,7 @@ def estimate_hedge_ratio(y, x):
     return float(fit.params.iloc[0]), float(fit.params.iloc[1]), fit.resid
 
 
-def screen_cointegration(
-    prices, candidate_pairs, significance=0.01, integration_alpha=0.05
-):
+def screen_cointegration(prices, candidate_pairs, significance=0.01, integration_alpha=0.05):
     if not 0 < significance < 1 or not 0 < integration_alpha < 1:
         raise ValueError("Significance levels must be in (0, 1).")
     if not np.isfinite(prices.to_numpy()).all() or (prices <= 0).any().any():
@@ -41,9 +39,7 @@ def screen_cointegration(
                 i1=bool(level[1] >= integration_alpha and diff[1] < integration_alpha),
             )
         except ValueError as exc:
-            unit_roots[ticker] = dict(
-                level_p=np.nan, diff_p=np.nan, i1=False, error=str(exc)
-            )
+            unit_roots[ticker] = dict(level_p=np.nan, diff_p=np.nan, i1=False, error=str(exc))
     rows, spreads = [], {}
     for dep, ind in candidates:
         row = dict(
@@ -122,17 +118,7 @@ def screen_cointegration(
 
 
 def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute daily logarithmic returns.
-
-    Parameters
-    ----------
-    prices : pd.DataFrame
-
-    Returns
-    -------
-    pd.DataFrame
-    """
+    "Daily log returns: log(P_t / P_(t-1))."
 
     if prices.isnull().values.any():
         raise ValueError("Prices contain NaN values.")
@@ -143,49 +129,20 @@ def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
 
 
 def correlation_matrix(returns: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute Pearson correlation matrix.
-
-    Parameters
-    ----------
-    returns : pd.DataFrame
-
-    Returns
-    -------
-    pd.DataFrame
-    """
+    "Pearson correlations between return series."
 
     return returns.corr(method="pearson")
 
 
-def generate_candidate_pairs(
-    corr_matrix: pd.DataFrame, top_n: int = 10
-) -> List[Tuple[str, str]]:
-    """
-    Generate candidate pairs using the Top-N correlation approach.
-
-    Parameters
-    ----------
-    corr_matrix : pd.DataFrame
-
-    top_n : int
-        Number of most correlated stocks retained for each asset.
-
-    Returns
-    -------
-    list[tuple]
-        Unique candidate pairs.
-    """
+def generate_candidate_pairs(corr_matrix: pd.DataFrame, top_n: int = 10) -> List[Tuple[str, str]]:
+    "Take each asset's top correlations; deduplicate and orient alphabetically."
 
     pairs = set()
 
     for stock in corr_matrix.columns:
 
         correlations = (
-            corr_matrix[stock]
-            .drop(labels=stock)
-            .sort_values(ascending=False)
-            .head(top_n)
+            corr_matrix[stock].drop(labels=stock).sort_values(ascending=False).head(top_n)
         )
 
         for candidate in correlations.index:

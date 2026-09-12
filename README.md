@@ -42,8 +42,26 @@ cash, no numeric open-position cap, and at most one position per pair. Simulatio
 uses 5,000 paths; Module 12 uses 100 placebos and 10,000 bootstrap replications.
 
 Rerunning overwrites the named outputs. Module 12 recalculates every placebo and
-builds its comparison from those calculations, not from old JSON files. Existing
-notebook displays retain the evaluated results until replaced by execution.
+builds its comparison from those calculations, not from old JSON files. Notebooks
+are distributed without stored outputs; execution generates their displays.
+
+## Shared mathematics
+
+The nine source files have direct roles:
+
+- `research_config.py`: shared settings.
+- `research_data.py`: input preparation and simple file helpers.
+- `cointegration.py`: candidate pairs and statistical screening.
+- `fractional_OU.py`: parameter estimation and pair eligibility.
+- `convergence_signal.py`: fractional simulations and convergence probabilities.
+- `market_math.py`: option pricing, volatility and spread calculations.
+- `backtest.py`: position sizing and daily portfolio accounting.
+- `forecast_calibration.py`: forecast outcomes and calibration.
+- `research_validation.py`: portfolio statistics, alpha, bootstrap and placebos.
+
+The backtest receives the shared settings object directly. There is no run registry,
+run identifier or saved configuration to load. Later modules need the ordinary
+data files produced by earlier modules and can execute in a fresh kernel.
 
 See `METHODOLOGY.md` and `data/inputs/README.md` for model, data and inference
 limitations. Options are model-valued, not historical listed-option quotes.

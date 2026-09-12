@@ -1,268 +1,383 @@
-"""Synthetic European option primitives and the shared backtest entry point.
+"""Next-close execution of lagged signals, with exact forecast horizons."""
 
-See METHODOLOGY.md for timing, risk budgets and forecast event definitions.
-"""
-
-from __future__ import annotations
-
-from math import exp, log, sqrt
-import zlib
-
+from math import sqrt
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
+from src.market_math import (
+    black_scholes_price,
+    black_scholes_delta,
+    _prepare_pair_parameters,
+    compute_log_spread,
+    precompute_oos_ewma_volatility,
+    _risk_free_at,
+    _has_converged,
+    _stable_seed,
+    option_types_from_spread_direction,
+    CONTRACT_MULTIPLIER,
+)
+from src.convergence_signal import calculate_convergence_signal
 
 
-TRADING_DAYS_PER_YEAR = 252
-CALENDAR_DAYS_PER_YEAR = 365
-CONTRACT_MULTIPLIER = 100
+def budgeted_size(beta, spots, deltas, prices, budget, max_error, slippage_bps, commission):
+    """Exhaustive integer search; maximize invested premium subject to error cap.
 
-
-def black_scholes_price(
-    spot: float,
-    strike: float,
-    time_to_expiry_years: float,
-    risk_free_rate: float,
-    volatility: float,
-    option_type: str,
-) -> float:
-    """European Black-Scholes value without dividends."""
-    S = float(spot)
-    K = float(strike)
-    T = float(time_to_expiry_years)
-    r = float(risk_free_rate)
-    sigma = float(volatility)
-    typ = str(option_type).lower()
-
-    if S <= 0 or K <= 0:
-        raise ValueError("spot and strike must be positive.")
-    if typ not in {"call", "put"}:
-        raise ValueError("option_type must be 'call' or 'put'.")
-
-    if T <= 0:
-        return float(max(S - K, 0.0) if typ == "call" else max(K - S, 0.0))
-
-    sigma = max(sigma, 1e-12)
-    d1 = (log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt(T))
-    d2 = d1 - sigma * sqrt(T)
-
-    if typ == "call":
-        return float(S * norm.cdf(d1) - K * exp(-r * T) * norm.cdf(d2))
-    return float(K * exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1))
-
-
-def black_scholes_delta(
-    spot: float,
-    strike: float,
-    time_to_expiry_years: float,
-    risk_free_rate: float,
-    volatility: float,
-    option_type: str,
-) -> float:
-    """European Black-Scholes delta without dividends."""
-    S = float(spot)
-    K = float(strike)
-    T = float(time_to_expiry_years)
-    r = float(risk_free_rate)
-    sigma = max(float(volatility), 1e-12)
-    typ = str(option_type).lower()
-
-    if typ not in {"call", "put"}:
-        raise ValueError("option_type must be 'call' or 'put'.")
-
-    if T <= 0:
-        if typ == "call":
-            return float(1.0 if S > K else 0.0)
-        return float(-1.0 if S < K else 0.0)
-
-    d1 = (log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt(T))
-    call_delta = float(norm.cdf(d1))
-    return call_delta if typ == "call" else call_delta - 1.0
-
-
-def option_types_from_spread_direction(direction: int) -> tuple[str, str]:
+    For each dependent count, the largest feasible independent count maximizes
+    cost for that count. Ties prefer lower hedge error, then fewer contracts.
     """
-    direction = +1 means spread is above equilibrium:
-        dependent PUT, independent CALL.
-    direction = -1 means spread is below equilibrium:
-        dependent CALL, independent PUT.
-    """
-    if direction == 1:
-        return "put", "call"
-    if direction == -1:
-        return "call", "put"
-    raise ValueError("direction must be +1 or -1.")
+    costs = CONTRACT_MULTIPLIER * np.asarray(prices) * (1 + slippage_bps / 10000) + commission
+    exposure = np.abs(deltas) * np.asarray(spots)
+    if not np.isfinite(costs).all() or (costs <= 0).any() or beta <= 0 or (exposure <= 0).any():
+        raise ValueError("Invalid sizing inputs.")
+    ratio = beta * exposure[0] / exposure[1]
+    best = None
+    for nd in range(1, max(0, int(np.floor((budget - costs[1]) / costs[0]))) + 1):
+        low = max(1, int(np.ceil((1 - max_error) * ratio * nd - 1e-12)))
+        high = min(
+            int(np.floor((1 + max_error) * ratio * nd + 1e-12)),
+            int(np.floor((budget - costs[0] * nd) / costs[1] + 1e-12)),
+        )
+        if high < low:
+            continue
+        error = abs(high / (nd * ratio) - 1)
+        debit = nd * costs[0] + high * costs[1]
+        rank = (debit, -error, -(nd + high))
+        if best is None or rank > best[0]:
+            best = (rank, nd, high, error)
+    if best is None:
+        return None
+    _, nd, ni, error = best
+    return dict(
+        dependent_contracts=nd,
+        independent_contracts=ni,
+        relative_hedge_error=float(error),
+        target_contract_ratio_ind_over_dep=float(ratio),
+        realized_contract_ratio_ind_over_dep=ni / nd,
+    )
 
 
-def _risk_free_at(
+def entry_option_terms(instruction, date, prices, volatility, risk_free_rates):
+    """Shared synthetic ATM terms for Module 06 and the actual execution engine."""
+    date = pd.Timestamp(date)
+    if date <= pd.Timestamp(instruction["signal_date"]):
+        raise ValueError("Execution must follow the signal date.")
+    T = (pd.Timestamp(instruction["expiry_date"]) - date).days / 365
+    if T <= 0:
+        raise ValueError("No remaining option maturity at execution.")
+    spots = [float(prices.at[date, instruction[l]]) for l in ("dependent", "independent")]
+    vols = [float(volatility.at[date, instruction[l]]) for l in ("dependent", "independent")]
+    rf = _risk_free_at(risk_free_rates, date)
+    types = option_types_from_spread_direction(instruction["direction"])
+    px = [black_scholes_price(s, s, T, rf, v, k) for s, v, k in zip(spots, vols, types)]
+    deltas = [black_scholes_delta(s, s, T, rf, v, k) for s, v, k in zip(spots, vols, types)]
+    return spots, vols, rf, types, px, deltas
+
+
+def run_backtest(
+    train_prices,
+    test_prices,
+    eligible_pairs,
+    cointegrated_pairs,
     risk_free_rates,
-    date,
-) -> float:
-    """
-    Accept either a scalar decimal rate or a dated pandas Series of decimal rates.
-    Uses the latest rate observable on or before `date`.
-    """
-    if np.isscalar(risk_free_rates):
-        return float(risk_free_rates)
-
-    s = pd.Series(risk_free_rates).dropna().astype(float).sort_index()
-    s.index = pd.to_datetime(s.index).normalize()
-    available = s.loc[: pd.Timestamp(date).normalize()]
-    if available.empty:
-        raise ValueError(f"No risk-free rate available on or before {date}.")
-    return float(available.iloc[-1])
-
-
-def compute_log_spread(
-    prices: pd.DataFrame,
-    dependent: str,
-    independent: str,
-    alpha: float,
-    beta: float,
-) -> pd.Series:
-    dep = prices[dependent].astype(float)
-    ind = prices[independent].astype(float)
-    if (dep <= 0).any() or (ind <= 0).any():
-        raise ValueError("Prices must be strictly positive for log spread.")
-    spread = np.log(dep) - float(alpha) - float(beta) * np.log(ind)
-    return spread.rename(f"{dependent}-{independent}")
-
-
-def precompute_oos_ewma_volatility(
-    train_prices: pd.DataFrame,
-    test_prices: pd.DataFrame,
-    lambda_: float = 0.94,
-) -> pd.DataFrame:
-    """
-    Precompute no-look-ahead OOS EWMA annualized volatilities.
-
-    The variance entering the first OOS day is initialized from training returns.
-    On OOS date t, sigma_t^2 uses information through return r_{t-1}, consistent
-    with sigma_t^2 = lambda*sigma_{t-1}^2 + (1-lambda)*r_{t-1}^2.
-    """
-    if not 0 < float(lambda_) < 1:
-        raise ValueError("lambda_ must be in (0,1).")
-
-    train = train_prices.sort_index().copy()
-    test = test_prices.sort_index().copy()
-
-    common = [c for c in test.columns if c in train.columns]
-    out = pd.DataFrame(index=test.index, columns=common, dtype=float)
-
-    for ticker in common:
-        tr = np.log(train[ticker].astype(float)).diff().dropna()
-        if len(tr) < 2:
-            raise ValueError(f"Insufficient training returns for {ticker}.")
-
-        var = max(float(tr.var(ddof=1)), 1e-12)
-
-        # Bring EWMA state through the complete training return history.
-        vals = tr.to_numpy(dtype=float)
-        for r_prev in vals:
-            var = float(lambda_) * var + (1.0 - float(lambda_)) * float(r_prev) ** 2
-
-        combined = pd.concat([train[ticker].tail(1), test[ticker]])
-        test_returns = np.log(combined.astype(float)).diff().iloc[1:]
-
-        # At date t, store variance known before incorporating r_t.
-        for date, r_t in test_returns.items():
-            out.at[date, ticker] = sqrt(TRADING_DAYS_PER_YEAR * var)
-            var = float(lambda_) * var + (1.0 - float(lambda_)) * float(r_t) ** 2
-
-    return out
-
-
-def _stable_seed(base_seed: int, pair: str, date) -> int:
-    token = f"{pair}|{pd.Timestamp(date).date()}".encode("utf-8")
-    extra = zlib.crc32(token)
-    return int((int(base_seed) + extra) % (2**32 - 1))
-
-
-def _has_converged(current_spread: float, mu: float, entry_direction: int) -> bool:
-    if entry_direction > 0:
-        return bool(current_spread <= mu)
-    return bool(current_spread >= mu)
-
-
-def _prepare_pair_parameters(
-    eligible_pairs: pd.DataFrame,
-    cointegrated_pairs: pd.DataFrame,
-) -> pd.DataFrame:
-    e = eligible_pairs.copy()
-    c = cointegrated_pairs.copy()
-
-    if "pair" not in e.columns:
-        e["pair"] = e["dependent"].astype(str) + "-" + e["independent"].astype(str)
-    if "pair" not in c.columns:
-        c["pair"] = c["dependent"].astype(str) + "-" + c["independent"].astype(str)
-
-    # Keep fOU columns from eligible set and add alpha/beta from Module 02.
-    needed_c = c[["pair", "alpha", "beta"]].drop_duplicates("pair")
-    p = e.merge(needed_c, on="pair", how="left", validate="one_to_one")
-
-    required = {
-        "pair",
-        "dependent",
-        "independent",
-        "alpha",
-        "beta",
-        "mu",
-        "kappa",
-        "sigma",
-        "hurst",
-        "variance",
+    config,
+    signal_cache=None,
+):
+    """Process each close in order: exits, pending entries, new signals, then equity."""
+    config.validate()
+    train, test = (train_prices.copy(), test_prices.copy())
+    for frame in (train, test):
+        frame.index = pd.to_datetime(frame.index).tz_localize(None).normalize()
+        if frame.empty or not frame.index.is_monotonic_increasing or frame.index.has_duplicates:
+            raise ValueError("Prices require nonempty, sorted, unique session indices.")
+        if not np.isfinite(frame.to_numpy()).all() or (frame <= 0).any().any():
+            raise ValueError(
+                "Missing/nonpositive prices: supply an explicit market-data policy; no OOS filling."
+            )
+    if train.index[-1] >= test.index[0]:
+        raise ValueError("Training and test periods must not overlap.")
+    params = (
+        _prepare_pair_parameters(eligible_pairs, cointegrated_pairs)
+        .sort_values("pair")
+        .reset_index(drop=True)
+    )
+    if (params.beta <= 0).any():
+        raise ValueError("This strategy supports positive-beta pairs only.")
+    if (
+        not np.isfinite(params[["alpha", "beta", "mu", "kappa", "sigma", "hurst", "variance"]])
+        .all()
+        .all()
+    ):
+        raise ValueError("Nonfinite pair parameters.")
+    if (
+        (params.kappa <= 0)
+        | (params.kappa >= 2)
+        | (params.sigma <= 0)
+        | (params.variance <= 0)
+        | (params.hurst <= 0)
+        | (params.hurst >= 0.5)
+    ).any():
+        raise ValueError(
+            "Requires positive variance/sigma, 0<H<.5 and stable daily Euler 0<kappa<2."
+        )
+    full = pd.concat([train, test])
+    dates = full.index
+    vol = precompute_oos_ewma_volatility(train, test, config.ewma_lambda)
+    spreads = {
+        r.pair: compute_log_spread(full, r.dependent, r.independent, r.alpha, r.beta)
+        for r in params.itertuples()
     }
-    missing = sorted(required - set(p.columns))
-    if missing:
-        raise KeyError(f"Missing required pair parameter columns: {missing}")
+    cash, opened, pending, trades, skipped, forecasts = (
+        float(config.initial_capital),
+        {},
+        {},
+        [],
+        [],
+        [],
+    )
+    equity = []
+    slip = config.slippage_bps / 10000
 
-    if p[["alpha", "beta"]].isna().any().any():
-        bad = p.loc[p[["alpha", "beta"]].isna().any(axis=1), "pair"].tolist()
-        raise ValueError(f"Missing alpha/beta for pairs: {bad}")
+    def quote(pos, date):
+        T = max((pos["expiry_date"] - date).days, 0) / 365
+        rf = _risk_free_at(risk_free_rates, date)
+        px = [
+            black_scholes_price(
+                test.at[date, pos[leg]],
+                pos[leg + "_strike"],
+                T,
+                rf,
+                vol.at[date, pos[leg]],
+                pos[leg + "_option_type"],
+            )
+            for leg in ("dependent", "independent")
+        ]
+        gross = CONTRACT_MULTIPLIER * sum(
+            (pos[leg + "_contracts"] * p for leg, p in zip(("dependent", "independent"), px))
+        )
+        return (float(gross), px)
 
-    return p.reset_index(drop=True)
-
-
-def run_walk_forward_backtest(*args, **kwargs):
-    """Canonical v2 next-close synthetic engine. See METHODOLOGY.md."""
-    from src.execution import run_backtest
-
-    return run_backtest(*args, **kwargs)
-
-
-def backtest_summary(
-    trades: pd.DataFrame,
-    equity_curve: pd.DataFrame,
-    initial_capital: float,
-) -> pd.Series:
-    """Compact Module 07 sanity-check summary; full performance analysis belongs in Module 08."""
-    if equity_curve.empty:
-        raise ValueError("equity_curve is empty.")
-
-    eq = equity_curve["equity"].astype(float)
-    running_max = eq.cummax().clip(lower=initial_capital)
-    drawdown = eq / running_max - 1.0
-
-    if trades.empty:
-        wins = np.nan
-        avg_trade_return = np.nan
-        median_trade_return = np.nan
-    else:
-        wins = float((trades["pnl"] > 0).mean())
-        avg_trade_return = float(trades["trade_return"].mean())
-        median_trade_return = float(trades["trade_return"].median())
-
-    return pd.Series(
-        {
-            "initial_capital": float(initial_capital),
-            "final_equity": float(eq.iloc[-1]),
-            "total_return": float(eq.iloc[-1] / initial_capital - 1.0),
-            "max_drawdown": float(drawdown.min()),
-            "n_trades": int(len(trades)),
-            "win_rate": wins,
-            "average_trade_return": avg_trade_return,
-            "median_trade_return": median_trade_return,
-            "max_concurrent_positions": int(equity_curve["n_open_positions"].max()),
-        },
-        name="module_07_summary",
+    # Daily sequence preserves next-close execution and known expiry settlement.
+    for date in test.index:
+        i = dates.get_loc(date)
+        # 1. Settle expiry or execute an exit signalled at the previous close.
+        for pair in list(opened):
+            pos = opened[pair]
+            expired = date >= pos["expiry_date"]
+            last = date == test.index[-1]
+            lagged_cross = _has_converged(spreads[pair].iloc[i - 1], pos["mu"], pos["direction"])
+            if expired or last or (date > pos["entry_date"] and lagged_cross):
+                gross, px = quote(pos, date)
+                fees = config.commission_per_contract * (
+                    pos["dependent_contracts"] + pos["independent_contracts"]
+                )
+                exit_cost = 0.0 if expired else gross * slip + fees
+                value = gross - exit_cost
+                cash += value
+                trades.append(
+                    {
+                        **pos,
+                        "exit_date": date,
+                        "exit_reason": (
+                            "expiry" if expired else "end_of_test" if last else "convergence"
+                        ),
+                        "exit_spread": float(spreads[pair].loc[date]),
+                        "exit_value": value,
+                        "exit_model_value": gross,
+                        "exit_cost": exit_cost,
+                        "exit_dependent_option_price": px[0],
+                        "exit_independent_option_price": px[1],
+                        "pnl": value - pos["entry_premium"],
+                        "trade_return": value / pos["entry_premium"] - 1,
+                        "holding_trading_days": int(i - dates.get_loc(pos["entry_date"])),
+                        "holding_calendar_days": int((date - pos["entry_date"]).days),
+                    }
+                )
+                del opened[pair]
+        # 2. Mark equity before entries; each debit is cash-limited and budgeted.
+        nav = cash + sum((quote(p, date)[0] for p in opened.values()))
+        for pair in sorted(pending):
+            instruction = pending[pair]
+            reason = None
+            if pair in opened:
+                reason = "already_open"
+            elif config.max_open_pairs is not None and len(opened) >= config.max_open_pairs:
+                reason = "max_open_pairs"
+            elif date >= instruction["expiry_date"]:
+                reason = "no_remaining_maturity"
+            elif date == test.index[-1]:
+                reason = "last_session"
+            if reason:
+                skipped.append(
+                    dict(
+                        date=date, pair=pair, reason=reason, signal_date=instruction["signal_date"]
+                    )
+                )
+                continue
+            pos = instruction.copy()
+            spots, vols, rf, types, px, deltas = entry_option_terms(
+                pos, date, test, vol, risk_free_rates
+            )
+            budget = max(0.0, min(cash, nav * config.premium_budget_fraction))
+            sizing = budgeted_size(
+                pos["beta"],
+                spots,
+                deltas,
+                px,
+                budget,
+                config.max_hedge_error,
+                config.slippage_bps,
+                config.commission_per_contract,
+            )
+            if sizing is None:
+                skipped.append(
+                    dict(
+                        date=date,
+                        pair=pair,
+                        signal_date=pos["signal_date"],
+                        reason="no_feasible_integer_hedge",
+                        budget=budget,
+                    )
+                )
+                continue
+            pos.update(sizing)
+            gross = CONTRACT_MULTIPLIER * sum(
+                (pos[l + "_contracts"] * p for l, p in zip(("dependent", "independent"), px))
+            )
+            entry_cost = gross * slip + config.commission_per_contract * (
+                pos["dependent_contracts"] + pos["independent_contracts"]
+            )
+            debit = gross + entry_cost
+            pos.update(
+                entry_date=date,
+                entry_spread=float(spreads[pair].loc[date]),
+                entry_premium=debit,
+                entry_model_value=gross,
+                entry_cost=entry_cost,
+                entry_budget=budget,
+                entry_risk_free_rate=rf,
+                option_calendar_dte=int((pos["expiry_date"] - date).days),
+                execution_convention="next_close",
+                option_model="European_BS_synthetic_q0",
+                contract_multiplier=100,
+            )
+            for j, leg in enumerate(("dependent", "independent")):
+                pos.update(
+                    {
+                        leg + "_strike": spots[j],
+                        leg + "_option_type": types[j],
+                        "entry_" + leg + "_spot": spots[j],
+                        "entry_" + leg + "_volatility": vols[j],
+                        "entry_" + leg + "_option_price": px[j],
+                        "entry_" + leg + "_delta": deltas[j],
+                    }
+                )
+            cash -= debit
+            opened[pair] = pos
+        pending = {}
+        # 3. Forecast from information through today; queue orders for tomorrow.
+        if date != test.index[-1]:
+            for row in params.itertuples():
+                if row.pair in opened:
+                    continue
+                history = spreads[row.pair].loc[:date]
+                z = (history.iloc[-1] - row.mu) / sqrt(row.variance)
+                if abs(z) < config.entry_z or len(history) < config.memory_window + 1:
+                    continue
+                signal_seed = _stable_seed(config.seed, row.pair, date)
+                # Cache exists only in memory during the current placebo calculation.
+                key = (
+                    row.pair,
+                    str(date),
+                    row.mu,
+                    row.kappa,
+                    row.sigma,
+                    row.hurst,
+                    row.variance,
+                    config.target_probability,
+                    config.entry_z,
+                    config.memory_window,
+                    config.max_horizon_days,
+                    config.n_paths,
+                    signal_seed,
+                    history.iloc[-(config.memory_window + 1) :].to_numpy().tobytes(),
+                )
+                sig = signal_cache.get(key) if signal_cache is not None else None
+                if sig is None:
+                    sig, _ = calculate_convergence_signal(
+                        history,
+                        row.mu,
+                        row.kappa,
+                        row.sigma,
+                        row.hurst,
+                        row.variance,
+                        target_probability=config.target_probability,
+                        entry_z=config.entry_z,
+                        memory_window=config.memory_window,
+                        max_horizon_days=config.max_horizon_days,
+                        n_paths=config.n_paths,
+                        seed=signal_seed,
+                    )
+                    if signal_cache is not None:
+                        signal_cache[key] = sig
+                h = sig.selected_dte_trading_days
+                if h is None:
+                    continue
+                rec = dict(
+                    pair=row.pair,
+                    dependent=row.dependent,
+                    independent=row.independent,
+                    alpha=row.alpha,
+                    beta=row.beta,
+                    mu=row.mu,
+                    signal_date=date,
+                    signal_spread=float(history.iloc[-1]),
+                    entry_z=float(z),
+                    direction=int(sig.direction),
+                    convergence_horizon_trading_days=int(h),
+                    target_probability=config.target_probability,
+                    probability_at_selected_horizon=float(sig.probability_at_selected_dte),
+                    probability_at_max_horizon=float(sig.probability_at_max_horizon),
+                    signal_seed=signal_seed,
+                )
+                rec["forecast_id"] = f"{row.pair}|{date.date()}"
+                forecasts.append(rec.copy())
+                if i + h >= len(dates):
+                    skipped.append(dict(date=date, pair=row.pair, reason="horizon_beyond_test"))
+                    continue
+                rec["expiry_date"] = dates[i + h]
+                rec["forecast_horizon_date"] = dates[i + h]
+                if h <= 1:
+                    skipped.append(dict(date=date, pair=row.pair, reason="no_remaining_maturity"))
+                    continue
+                pending[row.pair] = rec
+        # 4. Record cash plus marked open options after all transactions.
+        mark = sum((quote(p, date)[0] for p in opened.values()))
+        if cash < -1e-07 or (
+            config.max_open_pairs is not None and len(opened) > config.max_open_pairs
+        ):
+            raise AssertionError("Cash or concurrency invariant failed.")
+        equity.append(
+            dict(
+                date=date,
+                cash=cash,
+                open_position_value=mark,
+                equity=cash + mark,
+                n_open_positions=len(opened),
+            )
+        )
+    trade_columns = [
+        "pair",
+        "entry_date",
+        "exit_date",
+        "exit_reason",
+        "pnl",
+        "trade_return",
+        "entry_premium",
+    ]
+    return dict(
+        trades=pd.DataFrame(trades) if trades else pd.DataFrame(columns=trade_columns),
+        equity_curve=pd.DataFrame(equity).set_index("date"),
+        skipped_signals=pd.DataFrame(skipped),
+        pair_parameters=params,
+        oos_ewma_volatility=vol,
+        forecasts=pd.DataFrame(forecasts),
     )

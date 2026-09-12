@@ -8,7 +8,7 @@ define identical numerical and execution rules for the strategy and placebos.
 The default price input already contains a historically filtered 466-stock universe.
 Its original survivorship and full-sample availability biases CANNOT be undone by filtering
 it again. Module 01 explicitly sets `ALLOW_LEGACY_UNIVERSE=True` for that input;
-this choice is saved in settings.json. This is the immediately runnable, explicitly limited experiment.
+this flag is set explicitly in the notebook. This is the immediately runnable, explicitly limited experiment.
 For improved universe formation, supply a full historical price panel and dated membership
 CSV with `ticker,member_from,member_to,known_at`. `member_to` is exclusive (blank means open).
 Membership is frozen at the formation cutoff. A later exit from the index does not trigger
@@ -117,7 +117,7 @@ claim is made for overlapping forecasts.
 ## Benchmark and uncertainty
 
 The default benchmark is the saved ^GSPC price-index series (not SPY or a total-return index).
-It covers the first OOS valuation date. The supplied benchmark is copied with the other inputs;
+It covers the first OOS valuation date. The supplied benchmark is read from its explicit filename;
 no network call occurs during finalization. The annual risk-free input is explicitly treated
 as effective decimal, converted to (1+r)^(1/252)-1 using the prior-session value for each
 return interval. Historical rate-source quote conventions remain a data assumption.
@@ -138,26 +138,20 @@ model parameters and signal seeds. Upper-tail comparison uses (1 + count(value >
 not silently dropped. This is a conditional descriptive reference, not formal proof of
 alpha or correction for all strategy choices considered during research.
 
-## Reproducibility and acceptance
+## Reproducibility
 
-The numbered notebooks use one fixed folder, `data/processed/current/`. Module 01
-writes ordinary input copies and settings.json; later modules read those settings and
-saved tables. Rerunning a module overwrites its outputs. There are no named runs,
-manifest checks, environment/source hashes or completion-state gates. After changing
-inputs or upstream calculations, rerun the dependent modules; freshness is not enforced.
-Preserve an experiment by copying the results folder before rerunning it.
+Each notebook starts with imports and uses explicit filenames in its reading and
+saving cells. There is no directory discovery, input copying or saved-settings
+layer. Shared defaults are in src/research_config.py. After editing settings,
+restart kernels and rerun the notebooks in order. Generated files default to the
+working folder; manually edit matching upstream writes and downstream reads if
+using different locations. The user creates any required destination folders.
 
-Modules 04/06 are one-date explanatory snapshots; Module 07 recalculates daily signals
-and prices with the same functions. Diagnostics do not rerun the main portfolio.
-Module 12 recomputes every placebo portfolio from current inputs on each invocation;
-it does not reuse old checkpoints. In-memory forecast caching applies only within
-that invocation. Tests cover horizon events, lagged decisions, costs, budgets, position
-limits, fixed orientation, deterministic ordering, statistics, independent notebook
-execution, overwriting settings and no-trade/degenerate cases.
-
-The full historical experiment can be executed locally or through the research workflow. Review the current outputs
-before updating the thesis. Do not tune against OOS returns and present the same sample
-as untouched evidence. Rolling recalibration remains a separate, unimplemented experiment.
+Modules 04/06 are one-date previews. Module 07 calculates the full daily portfolio.
+Module 12 uses the same numerical and execution functions and recomputes all draws;
+its comparison is built from those draws rather than pre-existing placebo files.
+Library versions are pinned in requirements.txt. No automated tests or GitHub
+workflows are included in the submission repository.
 
 References for the implemented APIs:
 * https://www.statsmodels.org/stable/generated/statsmodels.tsa.stattools.coint.html

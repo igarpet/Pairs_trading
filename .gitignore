@@ -3,4 +3,6 @@ __pycache__/
 .ipynb_checkpoints/
 .pytest_cache/
 .venv/
-data/processed/current/
+/*.parquet
+/*.csv
+/*.json

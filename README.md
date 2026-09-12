@@ -1,74 +1,56 @@
 # Pairs Trading
 
-Cointegrated equity spreads, fractional OU forecasts and synthetic European options.
+Open Jupyter in this repository and use a Python 3.12 kernel. Install the pinned
+libraries once with `python -m pip install -r requirements.txt` in your environment.
 
-## Run in Jupyter
+## Notebook order
 
-Use Python 3.12. Open `00_START_HERE.ipynb` and install `requirements.txt` in the
-selected kernel. Use **Run All** in each notebook in this order:
+Run each notebook from top to bottom:
 
-| Notebook | Purpose / principal output |
-|---|---|
-| 01_Stock_Data | Settings and formation/test prices |
-| 01_RF_Data | Rates and benchmark coverage |
-| 02_Pair_Selection | Correlation candidates and cointegration audit |
-| 03_fractional_OU | Hurst and fractional OU parameters |
-| 03_pair_eligibility | Structural horizons and selected pairs |
-| 04_convergence_signal | One-date forecast preview |
-| 05_volatility_model | Lagged EWMA volatility |
-| 06_option_pricing | One-date option and sizing preview |
-| 07_backtest | Trades, forecasts, equity and summary |
-| 08_drawdown_diagnostics | Drawdowns and pair contributions |
-| 09_systematic_risk_diagnostics | Market alpha and rolling exposure |
-| 10_equilibrium_shift_diagnostics | Spread displacement diagnostics |
-| 11_static_convergence_calibration | Forecast calibration |
-| 12_alpha_validation | 100 placebos and block-bootstrap intervals |
+1. 01_Stock_Data
+2. 01_RF_Data
+3. 02_Pair_Selection
+4. 03_fractional_OU
+5. 03_pair_eligibility
+6. 04_convergence_signal
+7. 05_volatility_model
+8. 06_option_pricing
+9. 07_backtest
+10. 08_drawdown_diagnostics
+11. 09_systematic_risk_diagnostics
+12. 10_equilibrium_shift_diagnostics
+13. 11_static_convergence_calibration
+14. 12_alpha_validation
 
-Each notebook can run in a fresh kernel. They exchange ordinary files in
-`data/processed/current/`; Module 01 saves settings there. After changing settings
-or upstream data, rerun dependent notebooks in order. Modules 04 and 06 are previews;
-an empty preview is valid. Module 12 recomputes its draws. Copy outputs elsewhere
-before overwriting them if needed. There are no named-run or manifest gates.
+The first cell of each notebook contains imports only. Shared mathematical
+functions are in `src/`; stage-specific calculations are visible in the notebooks.
+No startup notebook, test folder, workflow or automatic executor is required.
 
-## Files
+## Files and settings
 
-* Root notebooks: stage-by-stage analysis, plots and stage-specific functions.
-* `src/`: shared functions grouped by purpose. The strategy and placebo portfolios
-  use the same simulation and execution functions.
-* `data/inputs/`: supplied prices, rates and benchmark.
-* `data/processed/current/`: generated tables, JSON summaries and placebo records;
-  created on execution and excluded from Git.
-* `tests/`: accounting, timing, statistics and separate-kernel notebook checks.
-* `execute_notebooks.py`: optional executor, also used by GitHub Actions.
+Insert or edit filenames directly in each notebook's loading and saving cells.
+The supplied inputs are in `data/inputs/`. Generated files default to the notebook
+working folder: for example, `train_prices.parquet`, `trades.parquet` and
+`equity_curve.parquet`. If you choose other filenames or locations, change the
+matching reads in subsequent notebooks. Create any destination folders yourself.
+There is no path discovery, directory creation, input copying or saved-settings layer.
 
-For example, `python execute_notebooks.py 07_backtest.ipynb` executes Module 07
-after its prerequisites exist and saves outputs even on failure. Start the
-**Research notebooks** workflow manually in GitHub Actions to execute tests,
-01–06, 07, 08–11 and finally 12 in dependent jobs with artifacts at each stage.
-The test workflow runs automatically on pushes and pull requests.
+Every notebook reads the shared defaults from `src/research_config.py`. Change
+research settings there, then restart the kernels and rerun the notebooks in order.
+Defaults are $100,000 starting equity, 5% of pre-entry equity per trade subject to
+cash, no numeric open-position cap, and at most one position per pair. Simulation
+uses 5,000 paths; Module 12 uses 100 placebos and 10,000 bootstrap replications.
 
-## Settings and verification
+Rerunning overwrites the named outputs. Module 12 recalculates every placebo and
+builds its comparison from those calculations, not from old JSON files. Existing
+notebook displays retain the evaluated results until replaced by execution.
 
-Defaults are in `src/research_config.py`; select overrides in Module 01.
-Starting equity is **$100,000**. Each entry's all-in debit is capped at **5% of
-pre-entry equity and available cash**. There is **no numeric open-pair cap**,
-with at most one position per pair, no borrowing and no continuous rebalancing.
-Signals use 5,000 paths; validation uses 100 placebos and 10,000 bootstrap
-replications per block length. See `METHODOLOGY.md` for seeds and assumptions.
-`requirements.txt` pins versions; Module 00 displays installed versions.
+See `METHODOLOGY.md` and `data/inputs/README.md` for model, data and inference
+limitations. Options are model-valued, not historical listed-option quotes.
 
-Run `python -m pytest -q` for verification. Notebook integration tests use small
-synthetic inputs without altering research defaults. Retained notebook displays
-contain evaluated historical results; rerunning replaces their displays. Full raw
-outputs can be regenerated or downloaded from research-workflow artifacts.
-The supplied universe has survivorship/availability limitations and options are
-model-valued. A positive return alone does not establish significant alpha.
+## AI assistance
 
-## AI assistance and author review
-
-ChatGPT/Codex assisted with code generation, debugging, restructuring, tests and
-results review. This assistance must be disclosed under the university requirements;
-repository organisation does not establish independent authorship. The student
-must personally review and understand the submitted code, verify results and
-references, and accurately describe the scope of assistance. Automated checks do
-not substitute for that review.
+ChatGPT/Codex assisted with code generation, debugging, restructuring and results
+review. This assistance must be disclosed under university requirements. The author
+must personally understand and verify the submitted code, results and references;
+the simplified structure does not change the scope of that assistance.

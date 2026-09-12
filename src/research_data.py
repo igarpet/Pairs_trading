@@ -1,6 +1,5 @@
 """Input validation and formation-only cleaning."""
 
-import json
 import numpy as np
 import pandas as pd
 
@@ -63,22 +62,6 @@ def prepare_prices(prices, config, membership=None, allow_legacy=False):
                 "Invalid retained prices. OOS missing observations require a delisting/missing-data policy; do not drop assets using future availability."
             )
     return train, test, report
-
-
-def write_json(filename, value):
-    def clean(x):
-        if isinstance(x, dict):
-            return {str(k): clean(v) for k, v in x.items()}
-        if isinstance(x, (list, tuple)):
-            return [clean(v) for v in x]
-        if isinstance(x, (float, np.floating)) and not np.isfinite(x):
-            return None
-        if isinstance(x, np.generic):
-            return x.item()
-        return x
-
-    with open(filename, "w", encoding="utf-8") as file:
-        json.dump(clean(value), file, indent=2, default=str, allow_nan=False)
 
 
 def read_series(path):

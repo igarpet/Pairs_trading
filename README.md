@@ -42,8 +42,12 @@ cash, no numeric open-position cap, and at most one position per pair. Simulatio
 uses 5,000 paths; Module 12 uses 100 placebos and 10,000 bootstrap replications.
 
 Rerunning overwrites the named outputs. Module 12 recalculates every placebo and
-builds its comparison from those calculations, not from old JSON files. Notebooks
+builds its comparison from those calculations, not from old output files. Notebooks
 are distributed without stored outputs; execution generates their displays.
+
+Summary dictionaries use `.pkl` files through `pd.to_pickle` and `pd.read_pickle`.
+Tables remain Parquet. Only load pickle files you generated or otherwise trust.
+After pulling this version, rerun Modules 07–12 to generate the pickle outputs.
 
 ## Shared mathematics
 
